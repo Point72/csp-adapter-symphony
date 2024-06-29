@@ -11,7 +11,7 @@ description = "A csp adapter for symphony"
 version = "0.1.0"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.9"
+requires-python = ">=3.8"
 authors = [{name = "the csp authors", email = "CSPOpenSource@point72.com"}]
 keywords = [
     "csp",
