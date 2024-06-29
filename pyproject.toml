@@ -1,0 +1,110 @@
+[build-system]
+requires = [
+    "hatchling>=1.22.4,<1.23",
+    "pkginfo>=1.10,<1.11",
+]
+build-backend = "hatchling.build"
+
+[project]
+name = "csp_adapter_symphony"
+description = "A csp adapter for symphony"
+version = "0.1.0"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{name = "the csp authors", email = "CSPOpenSource@point72.com"}]
+keywords = [
+    "csp",
+    "stream-processing",
+    "symphony",
+    "chat",
+    "chatbot",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Jupyter",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+]
+dependencies = [
+    "csp",
+    "requests",
+]
+
+[project.optional-dependencies]
+develop = [
+    "bump2version>=1.0.0",
+    "check-manifest",
+    "hatchling",
+    "isort",
+    "ruff>=0.3,<0.5",
+    "twine>=5,<5.2",
+    # test
+    "pytest",
+    "pytest-cov",
+]
+test = [
+    "pytest",
+    "pytest-cov",
+]
+
+[project.urls]
+Repository = "https://github.com/point72/csp-adapter-symphony"
+Homepage = "https://github.com/point72/csp-adapter-symphony"
+
+[tool.check-manifest]
+ignore = []
+
+[tool.hatch.build]
+artifacts = []
+
+[tool.hatch.build.sources]
+src = "/"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/csp_adapter_symphony",
+    "LICENSE",
+    "README.md",
+]
+exclude = [
+    "/.github",
+    "/.gitignore",
+    "/docs",
+]
+
+[tool.hatch.build.targets.wheel]
+include = [
+    "/csp_adapter_symphony",
+]
+exclude = [
+    "/.github",
+    "/.gitignore",
+    "/pyproject.toml",
+    "/docs",
+]
+
+[tool.isort]
+combine_as_imports = true
+include_trailing_comma = true
+line_length = 150
+profile = "black"
+default_section = "THIRDPARTY"
+sections = "FUTURE,THIRDPARTY,FIRSTPARTY,LOCALFOLDER"
+known_first_party = "csp_adapter_symphony"
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+testpaths = "csp_adapter_symphony/tests"
+
+[tool.ruff]
+line-length = 150
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403"]
