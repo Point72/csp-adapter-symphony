@@ -6,7 +6,6 @@
 - [Make commands](#make-commands)
 - [Prerequisites](#prerequisites)
 - [Clone](#clone)
-- [Install NodeJS](#install-nodejs)
 - [Install Python dependencies](#install-python-dependencies)
 - [Build](#build)
 - [Lint and Autoformat](#lint-and-autoformat)
@@ -38,14 +37,6 @@ Clone the repo with:
 ```bash
 git clone https://github.com/Point72/csp-adapter-symphony.git
 cd csp-adapter-symphony
-```
-
-## Install NodeJS
-
-Follow the instructions for [installing NodeJS](https://nodejs.org/en/download/package-manager/all) for your system. Once installed, you can [install `pnpm`](https://pnpm.io/installation) with:
-
-```bash
-npm instal --global pnpm
 ```
 
 ## Install Python dependencies
