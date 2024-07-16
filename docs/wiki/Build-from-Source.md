@@ -61,39 +61,34 @@ make build
 
 `csp-adapter-symphony` has linting and auto formatting.
 
-| Language   | Linter     | Autoformatter | Description |
-| :--------- | :--------- | :------------ | :---------- |
-| Python     | `ruff`     | `ruff`        | Style       |
-| JavaScript | `prettier` | `prettier`    | Style       |
-| Markdown   | `prettier` | `prettier`    | Style       |
+| Language | Linter     | Autoformatter | Description |
+| :------- | :--------- | :------------ | :---------- |
+| Python   | `ruff`     | `ruff`        | Style       |
+| Markdown | `prettier` | `prettier`    | Style       |
 
 **Python Linting**
 
 ```bash
-make lintpy
+make lint-py
 ```
 
 **Python Autoformatting**
 
 ```bash
-make fixpy
-```
-
-**JavaScript Linting**
-
-```bash
-make lintjs
-```
-
-**JavaScript Autoformatting**
-
-```bash
-make fixjs
+make fix-py
 ```
 
 **Documentation Linting**
 
-We use `prettier` for our Markdown linting, so follow the above docs.
+```bash
+make lint-docs
+```
+
+**Documentation Autoformatting**
+
+```bash
+make fix-docs
+```
 
 ## Testing
 

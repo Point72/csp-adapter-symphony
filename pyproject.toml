@@ -41,6 +41,8 @@ dependencies = [
 develop = [
     "bump2version>=1.0.0",
     "check-manifest",
+    "codespell>=2.2.6,<2.3",
+    "mdformat>=0.7.17,<0.8",
     "hatchling",
     "ruff>=0.5,<0.6",
     "twine>=5,<5.2",

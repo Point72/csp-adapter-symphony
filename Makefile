@@ -32,14 +32,25 @@ test: tests
 ###########
 .PHONY: lint fix format
 
-lint:  ## lint python with ruff
+lint-py:  ## lint python with ruff
 	python -m ruff check csp_adapter_symphony setup.py
 	python -m ruff format --check csp_adapter_symphony setup.py
 
-fix:  ## autoformat python code with ruff
+lint-docs:  ## lint docs with mdformat and codespell
+	python -m mdformat --check docs/wiki/ README.md
+	python -m codespell_lib docs/wiki/ README.md
+
+fix-py:  ## autoformat python code with ruff
 	python -m ruff check --fix csp_adapter_symphony setup.py
 	python -m ruff format csp_adapter_symphony setup.py
 
+fix-docs:  ## autoformat docs with mdformat and codespell
+	python -m mdformat docs/wiki/ README.md
+	python -m codespell_lib --write docs/wiki/ README.md
+
+lint: lint-py lint-docs  ## run all linters
+lints: lint
+fix: fix-py fix-docs  ## run all autoformatters
 format: fix
 
 #################
