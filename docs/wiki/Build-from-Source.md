@@ -101,11 +101,5 @@ make develop
 **Python**
 
 ```bash
-make testpy
-```
-
-**JavaScript**
-
-```bash
-make testjs
+make test
 ```
