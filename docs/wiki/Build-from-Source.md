@@ -73,7 +73,6 @@ make build
 | Language   | Linter     | Autoformatter | Description |
 | :--------- | :--------- | :------------ | :---------- |
 | Python     | `ruff`     | `ruff`        | Style       |
-| Python     | `isort`    | `isort`       | Imports     |
 | JavaScript | `prettier` | `prettier`    | Style       |
 | Markdown   | `prettier` | `prettier`    | Style       |
 

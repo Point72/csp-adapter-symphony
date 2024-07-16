@@ -32,13 +32,12 @@ test: tests
 ###########
 .PHONY: lint fix format
 
-lint:  ## lint python with isort and ruff
-	python -m isort csp_adapter_symphony setup.py --check
+lint:  ## lint python with ruff
 	python -m ruff check csp_adapter_symphony setup.py
 	python -m ruff format --check csp_adapter_symphony setup.py
 
-fix:  ## autoformat python code with isort and ruff
-	python -m isort csp_adapter_symphony setup.py
+fix:  ## autoformat python code with ruff
+	python -m ruff check --fix csp_adapter_symphony setup.py
 	python -m ruff format csp_adapter_symphony setup.py
 
 format: fix
