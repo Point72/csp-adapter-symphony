@@ -23,7 +23,7 @@ install:  ## install to site-packages
 .PHONY: test tests
 
 test: ## run the python unit tests
-	python -m pytest -v csp_adapter_symphony/tests --junitxml=junit.xml --cov=csp_adapter_symphony --cov-report=xml:.coverage.xml --cov-branch --cov-fail-under=1 --cov-report term-missing
+	python -m pytest -v csp_adapter_symphony/tests --junitxml=junit.xml --cov=csp_adapter_symphony --cov-report=xml:.coverage.xml --cov-branch --cov-fail-under=75 --cov-report term-missing
 
 test: tests
 
@@ -32,15 +32,25 @@ test: tests
 ###########
 .PHONY: lint fix format
 
-lint:  ## lint python with isort and ruff
-	python -m isort csp_adapter_symphony setup.py --check
+lint-py:  ## lint python with ruff
 	python -m ruff check csp_adapter_symphony setup.py
 	python -m ruff format --check csp_adapter_symphony setup.py
 
-fix:  ## autoformat python code with isort and ruff
-	python -m isort csp_adapter_symphony setup.py
+lint-docs:  ## lint docs with mdformat and codespell
+	python -m mdformat --check docs/wiki/ README.md
+	python -m codespell_lib docs/wiki/ README.md
+
+fix-py:  ## autoformat python code with ruff
+	python -m ruff check --fix csp_adapter_symphony setup.py
 	python -m ruff format csp_adapter_symphony setup.py
 
+fix-docs:  ## autoformat docs with mdformat and codespell
+	python -m mdformat docs/wiki/ README.md
+	python -m codespell_lib --write docs/wiki/ README.md
+
+lint: lint-py lint-docs  ## run all linters
+lints: lint
+fix: fix-py fix-docs  ## run all autoformatters
 format: fix
 
 #################

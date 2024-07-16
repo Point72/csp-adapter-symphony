@@ -41,9 +41,10 @@ dependencies = [
 develop = [
     "bump2version>=1.0.0",
     "check-manifest",
+    "codespell>=2.2.6,<2.3",
     "hatchling",
-    "isort",
-    "ruff>=0.3,<0.5",
+    "mdformat>=0.7.17,<0.8",
+    "ruff>=0.5,<0.6",
     "twine>=5,<5.2",
     # test
     "pytest",
@@ -90,15 +91,6 @@ exclude = [
     "/docs",
 ]
 
-[tool.isort]
-combine_as_imports = true
-include_trailing_comma = true
-line_length = 150
-profile = "black"
-default_section = "THIRDPARTY"
-sections = "FUTURE,THIRDPARTY,FIRSTPARTY,LOCALFOLDER"
-known_first_party = "csp_adapter_symphony"
-
 [tool.pytest.ini_options]
 asyncio_mode = "strict"
 testpaths = "csp_adapter_symphony/tests"
@@ -108,3 +100,14 @@ line-length = 150
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "F403"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+default-section = "third-party"
+known-first-party = ["csp_adapter_symphony"]
+section-order = [
+    "future",
+    "third-party",
+    "first-party",
+    "local-folder",
+]

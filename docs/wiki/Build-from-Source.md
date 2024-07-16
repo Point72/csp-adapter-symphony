@@ -6,7 +6,6 @@
 - [Make commands](#make-commands)
 - [Prerequisites](#prerequisites)
 - [Clone](#clone)
-- [Install NodeJS](#install-nodejs)
 - [Install Python dependencies](#install-python-dependencies)
 - [Build](#build)
 - [Lint and Autoformat](#lint-and-autoformat)
@@ -40,14 +39,6 @@ git clone https://github.com/Point72/csp-adapter-symphony.git
 cd csp-adapter-symphony
 ```
 
-## Install NodeJS
-
-Follow the instructions for [installing NodeJS](https://nodejs.org/en/download/package-manager/all) for your system. Once installed, you can [install `pnpm`](https://pnpm.io/installation) with:
-
-```bash
-npm instal --global pnpm
-```
-
 ## Install Python dependencies
 
 Python build and develop dependencies are specified in the `pyproject.toml`, but you can manually install them:
@@ -70,40 +61,34 @@ make build
 
 `csp-adapter-symphony` has linting and auto formatting.
 
-| Language   | Linter     | Autoformatter | Description |
-| :--------- | :--------- | :------------ | :---------- |
-| Python     | `ruff`     | `ruff`        | Style       |
-| Python     | `isort`    | `isort`       | Imports     |
-| JavaScript | `prettier` | `prettier`    | Style       |
-| Markdown   | `prettier` | `prettier`    | Style       |
+| Language | Linter     | Autoformatter | Description |
+| :------- | :--------- | :------------ | :---------- |
+| Python   | `ruff`     | `ruff`        | Style       |
+| Markdown | `prettier` | `prettier`    | Style       |
 
 **Python Linting**
 
 ```bash
-make lintpy
+make lint-py
 ```
 
 **Python Autoformatting**
 
 ```bash
-make fixpy
-```
-
-**JavaScript Linting**
-
-```bash
-make lintjs
-```
-
-**JavaScript Autoformatting**
-
-```bash
-make fixjs
+make fix-py
 ```
 
 **Documentation Linting**
 
-We use `prettier` for our Markdown linting, so follow the above docs.
+```bash
+make lint-docs
+```
+
+**Documentation Autoformatting**
+
+```bash
+make fix-docs
+```
 
 ## Testing
 
@@ -116,11 +101,5 @@ make develop
 **Python**
 
 ```bash
-make testpy
-```
-
-**JavaScript**
-
-```bash
-make testjs
+make test
 ```
