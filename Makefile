@@ -23,7 +23,7 @@ install:  ## install to site-packages
 .PHONY: test tests
 
 test: ## run the python unit tests
-	python -m pytest -v csp_adapter_symphony/tests --junitxml=junit.xml --cov=csp_adapter_symphony --cov-report=xml:.coverage.xml --cov-branch --cov-fail-under=1 --cov-report term-missing
+	python -m pytest -v csp_adapter_symphony/tests --junitxml=junit.xml --cov=csp_adapter_symphony --cov-report=xml:.coverage.xml --cov-branch --cov-fail-under=75 --cov-report term-missing
 
 test: tests
 
