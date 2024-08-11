@@ -39,7 +39,7 @@ dependencies = [
 
 [project.optional-dependencies]
 develop = [
-    "bump2version>=1.0.0",
+    "bump-my-version",
     "check-manifest",
     "codespell>=2.2.6,<2.3",
     "hatchling",
@@ -58,6 +58,22 @@ test = [
 [project.urls]
 Repository = "https://github.com/point72/csp-adapter-symphony"
 Homepage = "https://github.com/point72/csp-adapter-symphony"
+
+[tool.bumpversion]
+current_version = "0.1.0"
+commit = true
+tag = false
+commit_args = "-s"
+
+[[tool.bumpversion.files]]
+filename = "csp_adapter_symphony/__init__.py"
+search = '__version__ = "{current_version}"'
+replace = '__version__ = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
 
 [tool.check-manifest]
 ignore = []
