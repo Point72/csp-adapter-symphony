@@ -1,9 +1,10 @@
 import csp
+import pytest
 from csp import ts
 from time import sleep
 from unittest.mock import MagicMock, call, patch
 
-from csp_adapter_symphony import SymphonyAdapter, SymphonyMessage, SymphonyRoomMapper, mention_user, send_symphony_message
+from csp_adapter_symphony import SymphonyAdapter, SymphonyMessage, SymphonyRoomMapper, format_with_message_ml, mention_user, send_symphony_message
 
 SAMPLE_EVENTS = [
     {
@@ -77,7 +78,24 @@ class TestSymphony:
         assert mention_user("blerg@blerg.com") == '<mention email="blerg@blerg.com" />'
         assert mention_user("blergid") == '<mention uid="blergid" />'
 
-    def test_symphony_instantiation(self):
+    def test_to_message_ml(self):
+        input_text = "This & that < ${variable} #{hashtag}"
+        expected_output = "This &#38; that &lt; &#36;{variable} &#35;{hashtag}"
+        assert format_with_message_ml(input_text) == expected_output
+
+    def test_from_message_ml(self):
+        input_text = "This &#38; that &lt; &#36;{variable} &#35;{hashtag}"
+        expected_output = "This & that < ${variable} #{hashtag}"
+        assert format_with_message_ml(input_text, to_message_ml=False) == expected_output
+
+    def test_no_changes(self):
+        input_text = "Regular text without special characters"
+        assert format_with_message_ml(input_text) == input_text
+        assert format_with_message_ml(input_text, to_message_ml=False) == input_text
+
+    @pytest.mark.parametrize("existing_datafeed", [True, False])
+    @pytest.mark.parametrize("inform_client", [True, False])
+    def test_symphony_instantiation(self, existing_datafeed, inform_client, caplog):
         with (
             patch("requests.get") as requests_get_mock,
             patch("requests.post") as requests_post_mock,
@@ -97,11 +115,16 @@ class TestSymphony:
 
             # mock get request response based on url
             def get_request(url, headers, json=None):
-                assert url in ("https://symphony.host/pod/v3/room/{room_id}/info",)
+                assert url in ("https://symphony.host/pod/v3/room/{room_id}/info", "https://symphony.host/agent/v5/datafeeds")
                 resp_mock = MagicMock()
                 resp_mock.status_code = 200
                 if url == "https://symphony.host/pod/v3/room/{room_id}/info":
                     resp_mock.json.return_value = {"roomAttributes": {"name": "a sample room"}}
+                elif url == "https://symphony.host/agent/v5/datafeeds":
+                    if existing_datafeed:
+                        resp_mock.json.return_value = [{"id": "an id", "type": "fanout"}]
+                    else:
+                        resp_mock.json.return_value = []  # no existing datafeeds
                 return resp_mock
 
             requests_get_mock.side_effect = get_request
@@ -130,8 +153,11 @@ class TestSymphony:
                     # room lookup
                     resp_mock.json.return_value = {"rooms": [{"roomAttributes": {"name": "another sample room"}, "roomSystemInfo": {"id": "an id"}}]}
                 elif url == "https://symphony.host/agent/v4/stream/{sid}/message/create":
+                    if inform_client:
+                        resp_mock.json.return_value = {}
+                        resp_mock.status_code = 401
+                        ...
                     # send message
-                    ...
                 sleep(0.1)
                 return resp_mock
 
@@ -151,6 +177,8 @@ class TestSymphony:
                 "https://symphony.host/pod/v3/room/{{room_id}}/info",
                 "my_cert_string",
                 "my_key_string",
+                error_room=None if not inform_client else "another sample room",
+                inform_client=inform_client,
             )
 
             # assert auth worked properly to get token
@@ -190,19 +218,8 @@ class TestSymphony:
                 msg="Hello <@sender-user-id>!",
             )
 
-            assert requests_get_mock.call_count == 1
+            assert requests_get_mock.call_count == 2
             assert requests_get_mock.call_args_list == [
-                call(
-                    "https://symphony.host/pod/v3/room/{room_id}/info",
-                    headers={
-                        "sessionToken": "a-fake-token",
-                        "keyManagerToken": "a-fake-token",
-                        "Accept": "application/json",
-                    },
-                )
-            ]
-            assert requests_post_mock.call_count >= 5
-            assert (
                 call(
                     url="https://symphony.host/agent/v5/datafeeds",
                     headers={
@@ -210,9 +227,41 @@ class TestSymphony:
                         "keyManagerToken": "a-fake-token",
                         "Accept": "application/json",
                     },
+                ),
+                call(
+                    "https://symphony.host/pod/v3/room/{room_id}/info",
+                    headers={
+                        "sessionToken": "a-fake-token",
+                        "keyManagerToken": "a-fake-token",
+                        "Accept": "application/json",
+                    },
+                ),
+            ]
+            assert requests_post_mock.call_count >= 5
+            if existing_datafeed:
+                assert (
+                    call(
+                        url="https://symphony.host/agent/v5/datafeeds",
+                        headers={
+                            "sessionToken": "a-fake-token",
+                            "keyManagerToken": "a-fake-token",
+                            "Accept": "application/json",
+                        },
+                    )
+                    not in requests_post_mock.call_args_list
                 )
-                in requests_post_mock.call_args_list
-            )
+            else:
+                assert (
+                    call(
+                        url="https://symphony.host/agent/v5/datafeeds",
+                        headers={
+                            "sessionToken": "a-fake-token",
+                            "keyManagerToken": "a-fake-token",
+                            "Accept": "application/json",
+                        },
+                    )
+                    in requests_post_mock.call_args_list
+                )
             assert (
                 call(
                     url="https://symphony.host/agent/v5/datafeeds/{datafeed_id}/read",
@@ -260,3 +309,25 @@ class TestSymphony:
                     },
                 )
             ]
+            if inform_client:
+                # Check if the expected message is in the logs
+                assert "Cannot send message to room:" in caplog.text
+
+                # If you want to be more specific, you can check individual records:
+                for record in caplog.records:
+                    if "Cannot send message to room:" in record.message:
+                        assert record.levelname == "ERROR"
+                        break
+
+                assert (
+                    call(
+                        url="https://symphony.host/agent/v4/stream/{sid}/message/create",
+                        json={"message": "\n        <messageML>\n        ERROR: Could not send messsage on Symphony\n        </messageML>\n        "},
+                        headers={
+                            "sessionToken": "a-fake-token",
+                            "keyManagerToken": "a-fake-token",
+                            "Accept": "application/json",
+                        },
+                    )
+                    in requests_post_mock.call_args_list
+                )
