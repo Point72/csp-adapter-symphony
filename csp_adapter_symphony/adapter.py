@@ -11,14 +11,32 @@ from csp.impl.wiring import py_push_adapter_def
 from logging import getLogger
 from queue import Queue
 from tempfile import NamedTemporaryFile
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
-__all__ = ("SymphonyAdapter", "SymphonyMessage", "SymphonyRoomMapper", "mention_user", "send_symphony_message")
+__all__ = ("SymphonyAdapter", "SymphonyMessage", "SymphonyRoomMapper", "mention_user", "send_symphony_message", "format_with_message_ml")
 
 log = getLogger(__file__)
 
 
-def _sync_create_data_feed(datafeed_create_url: str, header: Dict[str, str]) -> str:
+def format_with_message_ml(text, to_message_ml: bool = True) -> str:
+    """If to_message_ml, we convert to message ml by replacing special sequences of character. Else, we convert from message_ml in the same way"""
+    pairs = [
+        ("&", "&#38;"),
+        ("<", "&lt;"),
+        ("${", "&#36;{"),
+        ("#{", "&#35;{"),
+    ]
+
+    for original, msg_ml_version in pairs:
+        if to_message_ml:
+            text = text.replace(original, msg_ml_version)
+        else:
+            text = text.replace(msg_ml_version, original)
+
+    return text
+
+
+def _sync_create_data_feed(datafeed_create_url: str, header: Dict[str, str]) -> Tuple[requests.Response, str]:
     r = requests.post(
         url=datafeed_create_url,
         headers=header,
@@ -26,6 +44,22 @@ def _sync_create_data_feed(datafeed_create_url: str, header: Dict[str, str]) -> 
     datafeed_id = r.json()["id"]
     log.info(f"created symphony datafeed with id={datafeed_id}")
     return r, datafeed_id
+
+
+def _get_or_create_datafeed(datafeed_create_url: str, header: Dict[str, str]) -> Tuple[requests.Response, str]:
+    """
+    It is considered best practice that bot's only create and read from one datafeed. If your bot goes down, it should re-authenticate, and try to read from the previously created datafeed.  If this fails then you should create a new datafeed, and begin reading from this new datafeed.
+
+    Creating and reading from multiple datafeeds concurrently can result in your bot processing duplicate messages and subsequently sending duplicate or out of order messages back to the user.
+    """
+    r = requests.get(
+        url=datafeed_create_url,
+        headers=header,
+    )
+    existing_datafeeds = r.json()
+    if not existing_datafeeds:
+        return _sync_create_data_feed(datafeed_create_url, header)
+    return r, existing_datafeeds[0]["id"]
 
 
 def _client_cert_post(host: str, request_url: str, cert_file: str, key_file: str) -> str:
@@ -213,7 +247,7 @@ class SymphonyMessage(csp.Struct):
     user: str
     user_email: str  # email of the author, for mentions
     user_id: str  # uid of the author, for mentions
-    tags: [str]  # list of user ids in message, for mentions
+    tags: List[str]  # list of user ids in message, for mentions
     room: str
     msg: str
     form_id: str
@@ -254,6 +288,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         self._datafeed_create_url = datafeed_create_url
         self._datafeed_delete_url = datafeed_delete_url
         self._datafeed_read_url = datafeed_read_url
+        self._datafeed_id: Optional[str] = None
 
         # auth
         self._header = header
@@ -264,15 +299,25 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         self._exit_msg = exit_msg
         self._room_mapper = room_mapper
 
-    def start(self, starttime, endtime):
+    def _delete_datafeed_if_set(self):
+        if self._datafeed_id is not None:
+            delete_url = self._datafeed_delete_url.format(datafeed_id=self._datafeed_id)
+            resp = requests.delete(url=delete_url, headers=self._header)
+            log.info(f"Deleted datafeed with url={delete_url}: resp={resp}")
+            self._datafeed_id = None
+
+    def _set_new_datafeed(self):
         # get symphony session
-        resp, datafeed_id = _sync_create_data_feed(self._datafeed_create_url, self._header)
+        self._delete_datafeed_if_set()
+        resp, datafeed_id = _get_or_create_datafeed(self._datafeed_create_url, self._header)
         if resp.status_code not in (200, 201, 204):
-            raise Exception(f"ERROR: bad status ({resp.status_code}) from _sync_create_data_feed, cannot start Symphony reader")
+            raise Exception(f"ERROR: bad status ({resp.status_code}) from _get_or_create_datafeed, cannot start Symphony reader")
         else:
             self._url = self._datafeed_read_url.format(datafeed_id=datafeed_id)
-            self._datafeed_delete_url = self._datafeed_delete_url.format(datafeed_id=datafeed_id)
+            self._datafeed_id = datafeed_id
 
+    def start(self, starttime, endtime):
+        self._set_new_datafeed()
         for room in self._rooms:
             room_id = self._room_mapper.get_room_id(room)
             if not room_id:
@@ -288,9 +333,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         if self._running:
             # in order to unblock current requests.get, send a message to one of the rooms we are listening on
             self._running = False
-            if self._datafeed_delete_url is not None:
-                resp = requests.delete(url=self._datafeed_delete_url, headers=self._header)
-                log.info(f"Deleted datafeed with url={self._datafeed_delete_url}: resp={resp}")
+            self._delete_datafeed_if_set()
             if self._exit_msg:
                 send_symphony_message(self._exit_msg, next(iter(self._room_ids)), self._header)
             self._thread.join()
@@ -300,7 +343,12 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         while self._running:
             resp = requests.post(url=self._url, headers=self._header, json={"ackId": ack_id})
             ret = []
-            if resp.status_code == 200:
+            if resp.status_code == 400:
+                # Bad datafeed, we need a new one
+                self._set_new_datafeed()
+                ack_id = ""
+
+            elif resp.status_code == 200:
                 msg_json = resp.json()
                 if "ackId" in msg_json:
                     ack_id = msg_json["ackId"]
@@ -404,6 +452,8 @@ def _send_messages(
     header: Dict[str, str],
     room_mapper: SymphonyRoomMapper,
     message_create_url: str,
+    error_room: Optional[str] = None,
+    inform_client: bool = False,
 ):
     """read messages from msg_queue and write to symphony. msg_queue to contain instances of SymphonyMessage, or None to shut down"""
     while True:
@@ -413,12 +463,48 @@ def _send_messages(
             break
 
         room_id = room_mapper.get_room_id(msg.room)
+        error, msg_resp = None, None
         if not room_id:
-            log.error(f"cannot find id for symphony room {msg.room} found in SymphonyMessage")
+            error = f"Cannot find id for symphony room {msg.room} found in SymphonyMessage"
         else:
-            r = send_symphony_message(msg.msg, room_id, message_create_url, header)
-            if r.status_code != 200:
-                log.error(f"Cannot send message - symphony server response: {r.status_code} {r.text}")
+            msg_resp = send_symphony_message(msg.msg, room_id, message_create_url, header)
+            if msg_resp.status_code != 200:
+                error = f"Cannot send message to room: '{msg.room}' - received symphony server response: status_code: {msg_resp.status_code} text: '{msg_resp.text}'"
+                # let client know that an error occured
+                if inform_client:
+                    send_symphony_message(
+                        "ERROR: Could not send messsage on Symphony",
+                        room_id,
+                        message_create_url,
+                        header,
+                    )
+
+        if error is not None:
+            log.error(error)
+
+            if error_room is not None and (error_room_id := room_mapper.get_room_id(error_room)):
+                formatted_error = format_with_message_ml(error, to_message_ml=True)
+
+                # try to send full error message from Symphony, this might fail if not properly formatted
+                error_msg_resp = send_symphony_message(
+                    formatted_error,
+                    error_room_id,
+                    message_create_url,
+                    header,
+                )
+
+                # If we failed sending the full response
+                if error_msg_resp.status_code != 200:
+                    # just log this error
+                    log.error(
+                        f"Cannot send message to room {error_room} - received symphony server response: {error_msg_resp.status_code} {error_msg_resp.text}"
+                    )
+                    send_symphony_message(
+                        f"A message failed to be sent via symphony to room {msg.room}, and the error message couldn't be properly displayed.",
+                        error_room_id,
+                        message_create_url,
+                        header,
+                    )
 
 
 class SymphonyAdapter:
@@ -436,6 +522,8 @@ class SymphonyAdapter:
         room_info_url: str,
         cert_string: str,
         key_string: str,
+        error_room: Optional[str] = None,
+        inform_client: bool = False,
     ):
         """Setup Symphony Reader
 
@@ -456,6 +544,8 @@ class SymphonyAdapter:
 
             cert_string (str): pem format string of client certificate
             key_string (str): pem format string of client private key
+            error_room (Optional[str]): A room to direct error messages to, if a message fails to be sent over symphony
+            inform_client (bool): Whether to inform the intended recipient of a failed message that the message failed
             rooms (set): set of initial rooms for the bot to enter
         """
         self._auth_host = auth_host
@@ -472,6 +562,8 @@ class SymphonyAdapter:
         self._key_string = key_string
         self._header = _symphony_session(self._auth_host, self._session_auth_path, self._key_auth_path, self._cert_string, self._key_string)
         self._room_mapper = SymphonyRoomMapper(self._room_search_url, self._room_info_url, self._header)
+        self._error_room = error_room
+        self._inform_client = inform_client
 
     @csp.graph
     def subscribe(self, rooms: set = set(), exit_msg: str = "") -> ts[[SymphonyMessage]]:
@@ -494,7 +586,10 @@ class SymphonyAdapter:
 
         with csp.start():
             s_queue = Queue(maxsize=0)
-            s_thread = threading.Thread(target=_send_messages, args=(s_queue, self._header, self._room_mapper, self._message_create_url))
+            s_thread = threading.Thread(
+                target=_send_messages,
+                args=(s_queue, self._header, self._room_mapper, self._message_create_url, self._error_room, self._inform_client),
+            )
             s_thread.start()
 
         with csp.stop():
