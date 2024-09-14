@@ -349,9 +349,8 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
                 resp = requests.post(url=self._url, headers=self._header, json={"ackId": ack_id})
             except Exception as e:
                 error_msg = "An exception occured trying read from the datafeed, Symphony reader shutting down..."
-                error_room_id = self._room_mapper.get_room_id(self._error_room)
-                if error_room_id is not None:
-                    log.error(error_msg, exc_info=True)
+                log.error(error_msg, exc_info=True)
+                if self._error_room and (error_room_id := self._room_mapper.get_room_id(self._error_room)):
                     send_symphony_message(error_msg, error_room_id, self._message_create_url, self._header)
                 raise e
             ret = []
