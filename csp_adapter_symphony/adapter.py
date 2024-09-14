@@ -260,10 +260,12 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         datafeed_create_url: str,
         datafeed_delete_url: str,
         datafeed_read_url: str,
+        message_create_url: str,
         header: Dict[str, str],
         rooms: set,
         exit_msg: str = "",
         room_mapper: Optional[SymphonyRoomMapper] = None,
+        error_room: Optional[str] = None,
     ):
         """Setup Symphony Reader
 
@@ -289,6 +291,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         self._datafeed_delete_url = datafeed_delete_url
         self._datafeed_read_url = datafeed_read_url
         self._datafeed_id: Optional[str] = None
+        self._message_create_url = message_create_url
 
         # auth
         self._header = header
@@ -298,6 +301,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         self._room_ids = set()
         self._exit_msg = exit_msg
         self._room_mapper = room_mapper
+        self._error_room = error_room
 
     def _delete_datafeed_if_set(self):
         if self._datafeed_id is not None:
@@ -335,13 +339,20 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
             self._running = False
             self._delete_datafeed_if_set()
             if self._exit_msg:
-                send_symphony_message(self._exit_msg, next(iter(self._room_ids)), self._header)
+                send_symphony_message(self._exit_msg, next(iter(self._room_ids)), self._message_create_url, self._header)
             self._thread.join()
 
     def _run(self):
         ack_id = ""
         while self._running:
-            resp = requests.post(url=self._url, headers=self._header, json={"ackId": ack_id})
+            try:
+                resp = requests.post(url=self._url, headers=self._header, json={"ackId": ack_id})
+            except Exception as e:
+                error_msg = "An exception occured trying read from the datafeed, Symphony reader shutting down..."
+                log.error(error_msg, exc_info=True)
+                if self._error_room and (error_room_id := self._room_mapper.get_room_id(self._error_room)):
+                    send_symphony_message(error_msg, error_room_id, self._message_create_url, self._header)
+                raise e
             ret = []
             if resp.status_code == 400:
                 # Bad datafeed, we need a new one
@@ -440,10 +451,12 @@ SymphonyReaderPushAdapter = py_push_adapter_def(
     datafeed_create_url=str,
     datafeed_delete_url=str,
     datafeed_read_url=str,
+    message_create_url=str,
     header=Dict[str, str],
     rooms=set,
     exit_msg=str,
     room_mapper=object,
+    error_room=object,
 )
 
 
@@ -544,7 +557,7 @@ class SymphonyAdapter:
 
             cert_string (str): pem format string of client certificate
             key_string (str): pem format string of client private key
-            error_room (Optional[str]): A room to direct error messages to, if a message fails to be sent over symphony
+            error_room (Optional[str]): A room to direct error messages to, if a message fails to be sent over symphony, or if the SymphonyReaderPushAdapter crashes
             inform_client (bool): Whether to inform the intended recipient of a failed message that the message failed
             rooms (set): set of initial rooms for the bot to enter
         """
@@ -571,10 +584,12 @@ class SymphonyAdapter:
             datafeed_create_url=self._datafeed_create_url,
             datafeed_delete_url=self._datafeed_delete_url,
             datafeed_read_url=self._datafeed_read_url,
+            message_create_url=self._message_create_url,
             header=self._header,
             rooms=rooms,
             exit_msg=exit_msg,
             room_mapper=self._room_mapper,
+            error_room=self._error_room,
         )
 
     # take in SymphonyMessage and send to symphony on separate thread
