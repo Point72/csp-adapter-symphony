@@ -4,6 +4,7 @@ import json
 import requests
 import ssl
 import threading
+import time
 from csp import ts
 from csp.impl.enum import Enum
 from csp.impl.pushadapter import PushInputAdapter
@@ -34,6 +35,15 @@ def format_with_message_ml(text, to_message_ml: bool = True) -> str:
             text = text.replace(msg_ml_version, original)
 
     return text
+
+
+def mention_user(email_or_userid: str = ""):
+    if email_or_userid:
+        if "@" in str(email_or_userid):
+            return f'<mention email="{email_or_userid}" />'
+        else:
+            return f'<mention uid="{email_or_userid}" />'
+    return ""
 
 
 def _sync_create_data_feed(datafeed_create_url: str, header: Dict[str, str]) -> Tuple[requests.Response, str]:
@@ -234,13 +244,32 @@ class SymphonyRoomMapper:
             self._name_to_id[user] = id
 
 
-def mention_user(email_or_userid: str = ""):
-    if email_or_userid:
-        if "@" in str(email_or_userid):
-            return f'<mention email="{email_or_userid}" />'
-        else:
-            return f'<mention uid="{email_or_userid}" />'
-    return ""
+class SymphonyRetryHandler:
+    def __init__(self, max_attempts: int = -1, initial_interval_ms: int = 500, multiplier: float = 2.0, max_interval_ms: int = 300000):
+        self._max_attempts = max_attempts
+        self._initial_interval_millis = initial_interval_ms
+        self._multiplier = multiplier
+        self._max_interval_millis = max_interval_ms
+
+        self._current_attempts = 0
+        self._current_wait = initial_interval_ms
+
+    def wait_time(self) -> Optional[int]:
+        """Returns the number of milliseconds to wait before attempting the operation again. If None, do not retry"""
+        if self._max_attempts != -1 and self._current_attempts >= self._max_attempts:
+            return None
+
+        self._current_attempts += 1
+        if self._current_attempts == 1:
+            # first attempt
+            return self._current_wait
+
+        self._current_wait = int(min(self._current_wait * self._multiplier, self._max_interval_millis))
+        return self._current_wait
+
+    def reset_attempts(self):
+        self._current_attempts = 0
+        self._current_wait = self._initial_interval_millis
 
 
 class SymphonyMessage(csp.Struct):
@@ -252,6 +281,80 @@ class SymphonyMessage(csp.Struct):
     msg: str
     form_id: str
     form_values: dict
+
+
+def _handle_event(event: dict, room_ids: set, room_mapper: SymphonyRoomMapper) -> Optional[SymphonyMessage]:
+    if ("type" not in event) or ("payload" not in event):
+        return None
+    if event["type"] == "MESSAGESENT":
+        payload = event.get("payload", {}).get("messageSent", {}).get("message")
+        if payload:
+            payload_stream_id = payload.get("stream", {}).get("streamId")
+            if payload_stream_id and (not room_ids or payload_stream_id in room_ids):
+                user = payload.get("user", {}).get("displayName", "USER_ERROR")
+                user_email = payload.get("user", {}).get("email", "USER_ERROR")
+                user_id = str(payload.get("user", {}).get("userId", "USER_ERROR"))
+                user_mentions = _get_user_mentions(payload)
+                msg = payload.get("message", "MSG_ERROR")
+
+                # room name or "IM" for direct message
+                room_type = payload.get("stream", {}).get("streamType", "ROOM")
+                if room_type == "ROOM":
+                    room_name = room_mapper.get_room_name(payload_stream_id)
+                elif room_type == "IM":
+                    # register the room name for the user so bot can respond
+                    room_mapper.set_im_id(user, payload_stream_id)
+                    room_name = "IM"
+                else:
+                    room_name = ""
+
+                if room_name:
+                    return SymphonyMessage(
+                        user=user,
+                        user_email=user_email,
+                        user_id=user_id,
+                        tags=user_mentions,
+                        room=room_name,
+                        msg=msg,
+                    )
+    elif event["type"] == "SYMPHONYELEMENTSACTION":
+        payload = event.get("payload").get("symphonyElementsAction", {})
+        payload_stream_id = payload.get("stream", {}).get("streamId")
+
+        if not payload_stream_id:
+            return None
+
+        if room_ids and payload_stream_id not in room_ids:
+            return None
+
+        user = event.get("initiator", {}).get("user", {}).get("displayName", "USER_ERROR")
+        user_email = event.get("initiator", {}).get("user", {}).get("email", "USER_ERROR")
+        user_id = str(event.get("initiator", {}).get("user", {}).get("userId", "USER_ERROR"))
+        user_mentions = _get_user_mentions(event.get("initiator", {}))
+        form_id = payload.get("formId", "FORM_ID_ERROR")
+        form_values = payload.get("formValues", {})
+
+        # room name or "IM" for direct message
+        room_type = payload.get("stream", {}).get("streamType", "ROOM")
+        if room_type == "ROOM":
+            room_name = room_mapper.get_room_name(payload_stream_id)
+        elif room_type == "IM":
+            # register the room name for the user so bot can respond
+            room_mapper.set_im_id(user, payload_stream_id)
+            room_name = "IM"
+        else:
+            room_name = ""
+
+        if room_name:
+            return SymphonyMessage(
+                user=user,
+                user_email=user_email,
+                user_id=user_id,
+                tags=user_mentions,
+                room=room_name,
+                form_id=form_id,
+                form_values=form_values,
+            )
 
 
 class SymphonyReaderPushAdapterImpl(PushInputAdapter):
@@ -266,6 +369,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         exit_msg: str = "",
         room_mapper: Optional[SymphonyRoomMapper] = None,
         error_room: Optional[str] = None,
+        retry_handler: Optional[SymphonyRetryHandler] = None,
     ):
         """Setup Symphony Reader
 
@@ -282,6 +386,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
             rooms (set): set of initial rooms for the bot to enter
             exit_msg (str): message to send on shutdown
             room_mapper (SymphonyRoomMapper): convenience object to map rooms that bot dynamically discovers
+            retry_handler (SymphonyRetryHandler): Utility class to implement exponential backoff on failed datafeeds to mimic the Symphony bot development kit
         """
         self._thread = None
         self._running = False
@@ -302,6 +407,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         self._exit_msg = exit_msg
         self._room_mapper = room_mapper
         self._error_room = error_room
+        self._retry_handler = retry_handler
 
     def _delete_datafeed_if_set(self):
         if self._datafeed_id is not None:
@@ -345,102 +451,40 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
     def _run(self):
         ack_id = ""
         while self._running:
+            ret = []
             try:
                 resp = requests.post(url=self._url, headers=self._header, json={"ackId": ack_id})
-            except Exception as e:
-                error_msg = "An exception occured trying read from the datafeed, Symphony reader shutting down..."
-                log.error(error_msg, exc_info=True)
-                if self._error_room and (error_room_id := self._room_mapper.get_room_id(self._error_room)):
-                    send_symphony_message(error_msg, error_room_id, self._message_create_url, self._header)
-                raise e
-            ret = []
-            if resp.status_code == 400:
-                # Bad datafeed, we need a new one
-                self._set_new_datafeed()
-                ack_id = ""
+                if resp.status_code == 400:
+                    # Bad datafeed, we need a new one
+                    self._set_new_datafeed()
+                    ack_id = ""
 
-            elif resp.status_code == 200:
-                msg_json = resp.json()
-                if "ackId" in msg_json:
-                    ack_id = msg_json["ackId"]
-                events = msg_json.get("events", [])
-                for m in events:
-                    if "type" in m and "payload" in m:
-                        if m["type"] == "MESSAGESENT":
-                            payload = m.get("payload", {}).get("messageSent", {}).get("message")
-                            if payload:
-                                payload_stream_id = payload.get("stream", {}).get("streamId")
-                                if payload_stream_id and (not self._room_ids or payload_stream_id in self._room_ids):
-                                    user = payload.get("user", {}).get("displayName", "USER_ERROR")
-                                    user_email = payload.get("user", {}).get("email", "USER_ERROR")
-                                    user_id = str(payload.get("user", {}).get("userId", "USER_ERROR"))
-                                    user_mentions = _get_user_mentions(payload)
-                                    msg = payload.get("message", "MSG_ERROR")
-
-                                    # room name or "IM" for direct message
-                                    room_type = payload.get("stream", {}).get("streamType", "ROOM")
-                                    if room_type == "ROOM":
-                                        room_name = self._room_mapper.get_room_name(payload_stream_id)
-                                    elif room_type == "IM":
-                                        # register the room name for the user so bot can respond
-                                        self._room_mapper.set_im_id(user, payload_stream_id)
-                                        room_name = "IM"
-                                    else:
-                                        room_name = ""
-
-                                    if room_name:
-                                        ret.append(
-                                            SymphonyMessage(
-                                                user=user,
-                                                user_email=user_email,
-                                                user_id=user_id,
-                                                tags=user_mentions,
-                                                room=room_name,
-                                                msg=msg,
-                                            )
-                                        )
-                        elif m["type"] == "SYMPHONYELEMENTSACTION":
-                            payload = m.get("payload").get("symphonyElementsAction", {})
-                            payload_stream_id = payload.get("stream", {}).get("streamId")
-
-                            if not payload_stream_id:
-                                continue
-
-                            if self._room_ids and payload_stream_id not in self._room_ids:
-                                continue
-
-                            user = m.get("initiator", {}).get("user", {}).get("displayName", "USER_ERROR")
-                            user_email = m.get("initiator", {}).get("user", {}).get("email", "USER_ERROR")
-                            user_id = str(m.get("initiator", {}).get("user", {}).get("userId", "USER_ERROR"))
-                            user_mentions = _get_user_mentions(m.get("initiator", {}))
-                            form_id = payload.get("formId", "FORM_ID_ERROR")
-                            form_values = payload.get("formValues", {})
-
-                            # room name or "IM" for direct message
-                            room_type = payload.get("stream", {}).get("streamType", "ROOM")
-                            if room_type == "ROOM":
-                                room_name = self._room_mapper.get_room_name(payload_stream_id)
-                            elif room_type == "IM":
-                                # register the room name for the user so bot can respond
-                                self._room_mapper.set_im_id(user, payload_stream_id)
-                                room_name = "IM"
-                            else:
-                                room_name = ""
-
-                            if room_name:
-                                ret.append(
-                                    SymphonyMessage(
-                                        user=user,
-                                        user_email=user_email,
-                                        user_id=user_id,
-                                        tags=user_mentions,
-                                        room=room_name,
-                                        form_id=form_id,
-                                        form_values=form_values,
-                                    )
-                                )
+                elif resp.status_code == 200:
+                    msg_json = resp.json()
+                    if "ackId" in msg_json:
+                        ack_id = msg_json["ackId"]
+                    events = msg_json.get("events", [])
+                    for m in events:
+                        maybe_msg = _handle_event(m, self._room_ids, self._room_mapper)
+                        if maybe_msg is not None:
+                            ret.append(maybe_msg)
+            except requests.RequestException as exc:
+                time_to_wait = self._retry_handler.wait_time() if self._retry_handler is not None else None
+                if time_to_wait is not None:
+                    error_msg = f"An exception occured trying to interact with datafeed, waiting {time_to_wait} milliseconds..."
+                    log.error(error_msg, exc_info=True)
+                    time.sleep(time_to_wait / 1_000)  # convert from milliseconds to seconds
+                    continue
+                else:
+                    error_msg = "An exception occured trying to interact with datafeed, max_attempts exceeded. Symphony Reader is shutting down..."
+                    log.error(error_msg, exc_info=True)
+                    if self._error_room and (error_room_id := self._room_mapper.get_room_id(self._error_room)):
+                        send_symphony_message(error_msg, error_room_id, self._message_create_url, self._header)
+                    raise exc
 
             if ret:
+                # We succeeded
+                self._retry_handler.reset_attempts()
                 self.push_tick(ret)
 
 
@@ -457,6 +501,7 @@ SymphonyReaderPushAdapter = py_push_adapter_def(
     exit_msg=str,
     room_mapper=object,
     error_room=object,
+    retry_handler=object,
 )
 
 
@@ -537,6 +582,10 @@ class SymphonyAdapter:
         key_string: str,
         error_room: Optional[str] = None,
         inform_client: bool = False,
+        max_attempts: int = -1,
+        initial_interval_ms: int = 500,
+        multiplier: float = 2.0,
+        max_interval_ms: int = 300000,
     ):
         """Setup Symphony Reader
 
@@ -560,6 +609,11 @@ class SymphonyAdapter:
             error_room (Optional[str]): A room to direct error messages to, if a message fails to be sent over symphony, or if the SymphonyReaderPushAdapter crashes
             inform_client (bool): Whether to inform the intended recipient of a failed message that the message failed
             rooms (set): set of initial rooms for the bot to enter
+
+            max_attempts (int): Max attempts for datafeed requests before raising exception. If -1, no maximum
+            initial_interval_ms (int): Initial interval to wait between attempts, in milliseconds
+            multiplier (float): Multiplier between attempt delays for exponential backoff
+            max_interval_ms (int): Maximum delay between retry attempts, in milliseconds
         """
         self._auth_host = auth_host
         self._session_auth_path = session_auth_path
@@ -577,6 +631,9 @@ class SymphonyAdapter:
         self._room_mapper = SymphonyRoomMapper(self._room_search_url, self._room_info_url, self._header)
         self._error_room = error_room
         self._inform_client = inform_client
+        self._retry_handler = SymphonyRetryHandler(
+            max_attempts=max_attempts, max_interval_ms=max_interval_ms, multiplier=multiplier, initial_interval_ms=initial_interval_ms
+        )
 
     @csp.graph
     def subscribe(self, rooms: set = set(), exit_msg: str = "") -> ts[[SymphonyMessage]]:
@@ -590,6 +647,7 @@ class SymphonyAdapter:
             exit_msg=exit_msg,
             room_mapper=self._room_mapper,
             error_room=self._error_room,
+            retry_handler=self._retry_handler,
         )
 
     # take in SymphonyMessage and send to symphony on separate thread
