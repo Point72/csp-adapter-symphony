@@ -1,22 +1,23 @@
 import csp
 import http.client
 import json
+import logging
 import requests
 import ssl
 import threading
-import time
+import tenacity
 from csp import ts
 from csp.impl.enum import Enum
 from csp.impl.pushadapter import PushInputAdapter
 from csp.impl.wiring import py_push_adapter_def
-from logging import getLogger
+from datetime import timedelta
 from queue import Queue
 from tempfile import NamedTemporaryFile
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 __all__ = ("SymphonyAdapter", "SymphonyMessage", "SymphonyRoomMapper", "mention_user", "send_symphony_message", "format_with_message_ml")
 
-log = getLogger(__file__)
+log = logging.getLogger(__file__)
 
 
 def format_with_message_ml(text, to_message_ml: bool = True) -> str:
@@ -244,34 +245,6 @@ class SymphonyRoomMapper:
             self._name_to_id[user] = id
 
 
-class SymphonyRetryHandler:
-    def __init__(self, max_attempts: int = -1, initial_interval_ms: int = 500, multiplier: float = 2.0, max_interval_ms: int = 300000):
-        self._max_attempts = max_attempts
-        self._initial_interval_millis = initial_interval_ms
-        self._multiplier = multiplier
-        self._max_interval_millis = max_interval_ms
-
-        self._current_attempts = 0
-        self._current_wait = initial_interval_ms
-
-    def wait_time(self) -> Optional[int]:
-        """Returns the number of milliseconds to wait before attempting the operation again. If None, do not retry"""
-        if self._max_attempts != -1 and self._current_attempts >= self._max_attempts:
-            return None
-
-        self._current_attempts += 1
-        if self._current_attempts == 1:
-            # first attempt
-            return self._current_wait
-
-        self._current_wait = int(min(self._current_wait * self._multiplier, self._max_interval_millis))
-        return self._current_wait
-
-    def reset_attempts(self):
-        self._current_attempts = 0
-        self._current_wait = self._initial_interval_millis
-
-
 class SymphonyMessage(csp.Struct):
     user: str
     user_email: str  # email of the author, for mentions
@@ -369,7 +342,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         exit_msg: str = "",
         room_mapper: Optional[SymphonyRoomMapper] = None,
         error_room: Optional[str] = None,
-        retry_handler: Optional[SymphonyRetryHandler] = None,
+        retry_decorator: Optional[Callable] = None,
     ):
         """Setup Symphony Reader
 
@@ -386,7 +359,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
             rooms (set): set of initial rooms for the bot to enter
             exit_msg (str): message to send on shutdown
             room_mapper (SymphonyRoomMapper): convenience object to map rooms that bot dynamically discovers
-            retry_handler (SymphonyRetryHandler): Utility class to implement exponential backoff on failed datafeeds to mimic the Symphony bot development kit
+            retry_decorator (Callable): Utility function to wrap functions with retry logic
         """
         self._thread = None
         self._running = False
@@ -407,7 +380,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         self._exit_msg = exit_msg
         self._room_mapper = room_mapper
         self._error_room = error_room
-        self._retry_handler = retry_handler
+        self._retry_decorator = retry_decorator
 
     def _delete_datafeed_if_set(self):
         if self._datafeed_id is not None:
@@ -443,48 +416,50 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         if self._running:
             # in order to unblock current requests.get, send a message to one of the rooms we are listening on
             self._running = False
-            self._delete_datafeed_if_set()
-            if self._exit_msg:
-                send_symphony_message(self._exit_msg, next(iter(self._room_ids)), self._message_create_url, self._header)
+            try:
+                self._delete_datafeed_if_set()
+                if self._exit_msg:
+                    send_symphony_message(self._exit_msg, next(iter(self._room_ids)), self._message_create_url, self._header)
+            except Exception:
+                log.error("Error on sending exit message and deleting datafeed on shutdown", exc_info=True)
             self._thread.join()
+
+    def _get_new_ack_id_and_messages(self, ack_id: str) -> Tuple[str, List[SymphonyMessage]]:
+        ret = []
+        resp = requests.post(url=self._url, headers=self._header, json={"ackId": ack_id})
+        if resp.status_code == 400:
+            # Bad datafeed, we need a new one
+            self._set_new_datafeed()
+            return "", []
+
+        elif resp.status_code == 200:
+            msg_json = resp.json()
+            if "ackId" in msg_json:
+                ack_id = msg_json["ackId"]
+            events = msg_json.get("events", [])
+            for m in events:
+                maybe_msg = _handle_event(m, self._room_ids, self._room_mapper)
+                if maybe_msg is not None:
+                    ret.append(maybe_msg)
+        return ack_id, ret
 
     def _run(self):
         ack_id = ""
+        get_new_messages_func = (
+            self._retry_decorator(self._get_new_ack_id_and_messages) if self._retry_decorator is not None else self._get_new_ack_id_and_messages
+        )
         while self._running:
-            ret = []
             try:
-                resp = requests.post(url=self._url, headers=self._header, json={"ackId": ack_id})
-                if resp.status_code == 400:
-                    # Bad datafeed, we need a new one
-                    self._set_new_datafeed()
-                    ack_id = ""
-
-                elif resp.status_code == 200:
-                    msg_json = resp.json()
-                    if "ackId" in msg_json:
-                        ack_id = msg_json["ackId"]
-                    events = msg_json.get("events", [])
-                    for m in events:
-                        maybe_msg = _handle_event(m, self._room_ids, self._room_mapper)
-                        if maybe_msg is not None:
-                            ret.append(maybe_msg)
-            except requests.RequestException as exc:
-                time_to_wait = self._retry_handler.wait_time() if self._retry_handler is not None else None
-                if time_to_wait is not None:
-                    error_msg = f"An exception occured trying to interact with datafeed, waiting {time_to_wait} milliseconds..."
-                    log.error(error_msg, exc_info=True)
-                    time.sleep(time_to_wait / 1_000)  # convert from milliseconds to seconds
-                    continue
-                else:
-                    error_msg = "An exception occured trying to interact with datafeed, max_attempts exceeded. Symphony Reader is shutting down..."
-                    log.error(error_msg, exc_info=True)
-                    if self._error_room and (error_room_id := self._room_mapper.get_room_id(self._error_room)):
-                        send_symphony_message(error_msg, error_room_id, self._message_create_url, self._header)
-                    raise exc
-
+                ack_id, ret = get_new_messages_func(ack_id)
+            except Exception as exc:
+                # On the final failure, this happens
+                # No need to retry these calls, we are failing anyways
+                error_msg = "An exception occured trying to interact with datafeed, max_attempts exceeded. Symphony Reader is shutting down..."
+                log.error(error_msg)
+                if self._error_room and (error_room_id := self._room_mapper.get_room_id(self._error_room)):
+                    send_symphony_message(error_msg, error_room_id, self._message_create_url, self._header)
+                raise exc
             if ret:
-                # We succeeded
-                self._retry_handler.reset_attempts()
                 self.push_tick(ret)
 
 
@@ -501,7 +476,7 @@ SymphonyReaderPushAdapter = py_push_adapter_def(
     exit_msg=str,
     room_mapper=object,
     error_room=object,
-    retry_handler=object,
+    retry_decorator=object,
 )
 
 
@@ -512,8 +487,10 @@ def _send_messages(
     message_create_url: str,
     error_room: Optional[str] = None,
     inform_client: bool = False,
+    retry_decorator: Optional[Callable] = None,
 ):
     """read messages from msg_queue and write to symphony. msg_queue to contain instances of SymphonyMessage, or None to shut down"""
+    send_message = retry_decorator(send_symphony_message) if retry_decorator is not None else send_symphony_message
     while True:
         msg = msg_queue.get()
         msg_queue.task_done()
@@ -525,12 +502,12 @@ def _send_messages(
         if not room_id:
             error = f"Cannot find id for symphony room {msg.room} found in SymphonyMessage"
         else:
-            msg_resp = send_symphony_message(msg.msg, room_id, message_create_url, header)
+            msg_resp = send_message(msg.msg, room_id, message_create_url, header)
             if msg_resp.status_code != 200:
                 error = f"Cannot send message to room: '{msg.room}' - received symphony server response: status_code: {msg_resp.status_code} text: '{msg_resp.text}'"
                 # let client know that an error occured
                 if inform_client:
-                    send_symphony_message(
+                    send_message(
                         "ERROR: Could not send messsage on Symphony",
                         room_id,
                         message_create_url,
@@ -544,7 +521,7 @@ def _send_messages(
                 formatted_error = format_with_message_ml(error, to_message_ml=True)
 
                 # try to send full error message from Symphony, this might fail if not properly formatted
-                error_msg_resp = send_symphony_message(
+                error_msg_resp = send_message(
                     formatted_error,
                     error_room_id,
                     message_create_url,
@@ -557,7 +534,7 @@ def _send_messages(
                     log.error(
                         f"Cannot send message to room {error_room} - received symphony server response: {error_msg_resp.status_code} {error_msg_resp.text}"
                     )
-                    send_symphony_message(
+                    send_message(
                         f"A message failed to be sent via symphony to room {msg.room}, and the error message couldn't be properly displayed.",
                         error_room_id,
                         message_create_url,
@@ -582,7 +559,7 @@ class SymphonyAdapter:
         key_string: str,
         error_room: Optional[str] = None,
         inform_client: bool = False,
-        max_attempts: int = -1,
+        max_attempts: int = 6,
         initial_interval_ms: int = 500,
         multiplier: float = 2.0,
         max_interval_ms: int = 300000,
@@ -631,8 +608,17 @@ class SymphonyAdapter:
         self._room_mapper = SymphonyRoomMapper(self._room_search_url, self._room_info_url, self._header)
         self._error_room = error_room
         self._inform_client = inform_client
-        self._retry_handler = SymphonyRetryHandler(
-            max_attempts=max_attempts, max_interval_ms=max_interval_ms, multiplier=multiplier, initial_interval_ms=initial_interval_ms
+
+        exp_wait = tenacity.wait_exponential(
+            min=timedelta(milliseconds=initial_interval_ms), max=timedelta(milliseconds=max_interval_ms), multiplier=multiplier
+        )
+        stop = tenacity.stop_after_attempt(max_attempts) if max_attempts != -1 else tenacity.stop_never
+        self._retry_decorator = tenacity.retry(
+            reraise=True,
+            stop=stop,
+            wait=exp_wait,
+            retry=tenacity.retry_if_exception_type(requests.RequestException),
+            before_sleep=tenacity.before_sleep_log(log, logging.DEBUG),
         )
 
     @csp.graph
@@ -647,7 +633,7 @@ class SymphonyAdapter:
             exit_msg=exit_msg,
             room_mapper=self._room_mapper,
             error_room=self._error_room,
-            retry_handler=self._retry_handler,
+            retry_decorator=self._retry_decorator,
         )
 
     # take in SymphonyMessage and send to symphony on separate thread
@@ -661,7 +647,15 @@ class SymphonyAdapter:
             s_queue = Queue(maxsize=0)
             s_thread = threading.Thread(
                 target=_send_messages,
-                args=(s_queue, self._header, self._room_mapper, self._message_create_url, self._error_room, self._inform_client),
+                args=(
+                    s_queue,
+                    self._header,
+                    self._room_mapper,
+                    self._message_create_url,
+                    self._error_room,
+                    self._inform_client,
+                    self._retry_decorator,
+                ),
             )
             s_thread.start()
 
@@ -676,9 +670,12 @@ class SymphonyAdapter:
 
     @csp.node
     def _set_presense(self, presence: ts[Presence]):
-        ret = requests.post(url=self._presence_url, json={"category": presence.name}, headers=self._header)
-        if ret.status_code != 200:
-            log.error(f"Cannot set presence - symphony server response: {ret.status_code} {ret.text}")
+        try:
+            ret = requests.post(url=self._presence_url, json={"category": presence.name}, headers=self._header)
+            if ret.status_code != 200:
+                log.error(f"Cannot set presence - symphony server response: {ret.status_code} {ret.text}")
+        except Exception:
+            log.error("Failed setting presence...", exc_info=True)
 
     @csp.graph
     def publish_presence(self, presence: ts[Presence]):
