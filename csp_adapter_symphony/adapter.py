@@ -559,7 +559,7 @@ class SymphonyAdapter:
         key_string: str,
         error_room: Optional[str] = None,
         inform_client: bool = False,
-        max_attempts: int = 6,
+        max_attempts: int = 10,
         initial_interval_ms: int = 500,
         multiplier: float = 2.0,
         max_interval_ms: int = 300000,
@@ -587,7 +587,7 @@ class SymphonyAdapter:
             inform_client (bool): Whether to inform the intended recipient of a failed message that the message failed
             rooms (set): set of initial rooms for the bot to enter
 
-            max_attempts (int): Max attempts for datafeed requests before raising exception. If -1, no maximum
+            max_attempts (int): Max attempts for datafeed and message post requests before raising exception. If -1, no maximum
             initial_interval_ms (int): Initial interval to wait between attempts, in milliseconds
             multiplier (float): Multiplier between attempt delays for exponential backoff
             max_interval_ms (int): Maximum delay between retry attempts, in milliseconds
@@ -669,17 +669,17 @@ class SymphonyAdapter:
             s_queue.put(msg)
 
     @csp.node
-    def _set_presense(self, presence: ts[Presence]):
+    def _set_presense(self, presence: ts[Presence], timeout: float = 5.0):
         try:
-            ret = requests.post(url=self._presence_url, json={"category": presence.name}, headers=self._header)
+            ret = requests.post(url=self._presence_url, json={"category": presence.name}, headers=self._header, timeout=timeout)
             if ret.status_code != 200:
                 log.error(f"Cannot set presence - symphony server response: {ret.status_code} {ret.text}")
         except Exception:
             log.error("Failed setting presence...", exc_info=True)
 
     @csp.graph
-    def publish_presence(self, presence: ts[Presence]):
-        self._set_presense(presence=presence)
+    def publish_presence(self, presence: ts[Presence], timeout: float = 5.0):
+        self._set_presense(presence=presence, timeout=timeout)
 
     @csp.graph
     def publish(self, msg: ts[SymphonyMessage]):
