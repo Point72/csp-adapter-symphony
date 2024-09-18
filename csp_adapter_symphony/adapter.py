@@ -421,7 +421,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
                 if self._exit_msg:
                     send_symphony_message(self._exit_msg, next(iter(self._room_ids)), self._message_create_url, self._header)
             except Exception:
-                log.error("Error on sending exit message and deleting datafeed on shutdown", exc_info=True)
+                log.exception("Error on sending exit message and deleting datafeed on shutdown")
             self._thread.join()
 
     def _get_new_ack_id_and_messages(self, ack_id: str) -> Tuple[str, List[SymphonyMessage]]:
@@ -675,7 +675,7 @@ class SymphonyAdapter:
             if ret.status_code != 200:
                 log.error(f"Cannot set presence - symphony server response: {ret.status_code} {ret.text}")
         except Exception:
-            log.error("Failed setting presence...", exc_info=True)
+            log.exception("Failed setting presence...")
 
     @csp.graph
     def publish_presence(self, presence: ts[Presence], timeout: float = 5.0):
