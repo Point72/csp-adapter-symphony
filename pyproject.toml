@@ -35,6 +35,7 @@ classifiers = [
 dependencies = [
     "csp",
     "requests",
+    "tenacity",
 ]
 
 [project.optional-dependencies]

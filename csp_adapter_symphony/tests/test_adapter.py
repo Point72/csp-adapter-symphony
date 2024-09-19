@@ -5,6 +5,8 @@ from time import sleep
 from unittest.mock import MagicMock, call, patch
 
 from csp_adapter_symphony import SymphonyAdapter, SymphonyMessage, SymphonyRoomMapper, format_with_message_ml, mention_user, send_symphony_message
+from csp_adapter_symphony.adapter import _handle_event
+
 
 SAMPLE_EVENTS = [
     {
@@ -38,6 +40,87 @@ def hello(msg: ts[SymphonyMessage]) -> ts[SymphonyMessage]:
 
 
 class TestSymphony:
+    def test_handle_event_messagesent(self):
+        mock_room_mapper = MagicMock()
+        mock_room_mapper.get_room_name.return_value = "Test Room"
+
+        event = {
+            "type": "MESSAGESENT",
+            "payload": {
+                "messageSent": {
+                    "message": {
+                        "stream": {"streamId": "123", "streamType": "ROOM"},
+                        "user": {"displayName": "John Doe", "email": "john@example.com", "userId": 456},
+                        "message": "Hello, world!",
+                        "data": '{"key": {"type": "com.symphony.user.mention", "id": [{"value":"789"}] } }',
+                    }
+                }
+            },
+        }
+
+        result = _handle_event(event, set(), mock_room_mapper)
+
+        assert isinstance(result, SymphonyMessage)
+        assert result.user == "John Doe"
+        assert result.user_email == "john@example.com"
+        assert result.user_id == "456"
+        assert result.room == "Test Room"
+        assert result.msg == "Hello, world!"
+        assert result.tags == ["789"]
+
+    def test_handle_event_messagesent_im(self):
+        mock_room_mapper = MagicMock()
+
+        event = {
+            "type": "MESSAGESENT",
+            "payload": {
+                "messageSent": {
+                    "message": {
+                        "stream": {"streamId": "123", "streamType": "IM"},
+                        "user": {"displayName": "John Doe", "email": "john@example.com", "userId": 456},
+                        "message": "Hello, world!",
+                    }
+                }
+            },
+        }
+
+        result = _handle_event(event, set(), mock_room_mapper)
+
+        assert isinstance(result, SymphonyMessage)
+        assert result.room == "IM"
+        mock_room_mapper.set_im_id.assert_called_once_with("John Doe", "123")
+
+    def test_handle_event_symphonyelementsaction(self):
+        mock_room_mapper = MagicMock()
+        mock_room_mapper.get_room_name.return_value = "Test Room"
+
+        event = {
+            "type": "SYMPHONYELEMENTSACTION",
+            "initiator": {"user": {"displayName": "John Doe", "email": "john@example.com", "userId": 456}},
+            "payload": {
+                "symphonyElementsAction": {"stream": {"streamId": "123", "streamType": "ROOM"}, "formId": "test_form", "formValues": {"key": "value"}}
+            },
+        }
+
+        result = _handle_event(event, set(), mock_room_mapper)
+
+        assert isinstance(result, SymphonyMessage)
+        assert result.user == "John Doe"
+        assert result.user_email == "john@example.com"
+        assert result.user_id == "456"
+        assert result.room == "Test Room"
+        assert result.form_id == "test_form"
+        assert result.form_values == {"key": "value"}
+
+    def test_handle_event_invalid(self):
+        mock_room_mapper = MagicMock()
+
+        event = {"type": "INVALID"}
+
+        result = _handle_event(event, set(), mock_room_mapper)
+
+        assert result is None
+
     def test_send_symphony_message(self):
         msg = "test_msg"
         room_id = "test_room_id"
