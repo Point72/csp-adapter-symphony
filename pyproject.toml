@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 [project]
 name = "csp_adapter_symphony"
 description = "A csp adapter for symphony"
-version = "0.1.1"
+version = "0.1.2"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.8"
@@ -61,7 +61,7 @@ Repository = "https://github.com/point72/csp-adapter-symphony"
 Homepage = "https://github.com/point72/csp-adapter-symphony"
 
 [tool.bumpversion]
-current_version = "0.1.1"
+current_version = "0.1.2"
 commit = true
 tag = false
 commit_args = "-s"
