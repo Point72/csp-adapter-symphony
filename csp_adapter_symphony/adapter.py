@@ -1,21 +1,18 @@
 import csp
-import http.client
 import json
 import logging
 import requests
-import ssl
 import threading
-import tenacity
 from csp import ts
 from csp.impl.enum import Enum
 from csp.impl.pushadapter import PushInputAdapter
 from csp.impl.wiring import py_push_adapter_def
-from datetime import timedelta
 from queue import Queue
-from tempfile import NamedTemporaryFile
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-__all__ = ("SymphonyAdapter", "SymphonyMessage", "SymphonyRoomMapper", "mention_user", "send_symphony_message", "format_with_message_ml")
+from .adapter_config import SymphonyAdapterConfig, SymphonyRoomMapper
+
+__all__ = ("SymphonyAdapter", "SymphonyMessage", "mention_user", "send_symphony_message", "format_with_message_ml")
 
 log = logging.getLogger(__file__)
 
@@ -73,66 +70,6 @@ def _get_or_create_datafeed(datafeed_create_url: str, header: Dict[str, str]) ->
     return r, existing_datafeeds[0]["id"]
 
 
-def _client_cert_post(host: str, request_url: str, cert_file: str, key_file: str) -> str:
-    request_headers = {"Content-Type": "application/json"}
-    request_body_dict = {}
-
-    # Define the client certificate settings for https connection
-    context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
-    context.load_cert_chain(certfile=cert_file, keyfile=key_file)
-
-    # Create a connection to submit HTTP requests
-    connection = http.client.HTTPSConnection(host, port=443, context=context)
-
-    # Use connection to submit a HTTP POST request
-    connection.request(method="POST", url=request_url, headers=request_headers, body=json.dumps(request_body_dict))
-
-    # Print the HTTP response from the IOT service endpoint
-    response = connection.getresponse()
-
-    if response.status != 200:
-        raise Exception(f"Cannot connect for symphony handshake to https://{host}{request_url}: {response.status}:{response.reason}")
-    data = response.read().decode("utf-8")
-    return json.loads(data)
-
-
-def _symphony_session(
-    auth_host: str,
-    session_auth_path: str,
-    key_auth_path: str,
-    cert_string: str,
-    key_string: str,
-) -> Dict[str, str]:
-    """Setup symphony session and return the header
-
-    Args:
-        auth_host (str): authentication host, like `company-api.symphony.com`
-        session_auth_path (str): path to authenticate session, like `/sessionauth/v1/authenticate`
-        key_auth_path (str): path to authenticate key, like `/keyauth/v1/authenticate`
-        cert_string (str): pem format string of client certificate
-        key_string (str): pem format string of client private key
-    Returns:
-        Dict[str, str]: headers from authentication
-    """
-    with NamedTemporaryFile(mode="wt", delete=False) as cert_file:
-        with NamedTemporaryFile(mode="wt", delete=False) as key_file:
-            cert_file.write(cert_string)
-            key_file.write(key_string)
-
-    data = _client_cert_post(auth_host, session_auth_path, cert_file.name, key_file.name)
-    session_token = data["token"]
-
-    data = _client_cert_post(auth_host, key_auth_path, cert_file.name, key_file.name)
-    key_manager_token = data["token"]
-
-    headers = {
-        "sessionToken": session_token,
-        "keyManagerToken": key_manager_token,
-        "Accept": "application/json",
-    }
-    return headers
-
-
 class Presence(csp.Enum):
     AVAILABLE = Enum.auto()
     AWAY = Enum.auto()
@@ -155,46 +92,6 @@ def send_symphony_message(msg: str, room_id: str, message_create_url: str, heade
     )
 
 
-def _get_room_id(room_name: str, room_search_url: str, header: Dict[str, str]):
-    """Given a room name, find its room ID"""
-    query = {"query": room_name}
-    res = requests.post(
-        url=room_search_url,
-        json=query,
-        headers=header,
-    )
-    if res and res.status_code == 200:
-        res_json = res.json()
-        for room in res_json["rooms"]:
-            # in theory there could be a room whose name is a subset of another, and so the search could return multiple
-            # go through search results to find room with name exactly as given
-            name = room.get("roomAttributes", {}).get("name")
-            if name and name == room_name:
-                id = room.get("roomSystemInfo", {}).get("id")
-                if id:
-                    return id
-        return None  # actually no exact matches, or malformed content from symphony
-    else:
-        log.error(f"ERROR looking up Symphony room_id for room {room_name}: status {res.status_code} text {res.text}")
-
-
-def _get_room_name(room_id: str, room_info_url: str, header: Dict[str, str]):
-    """Given a room ID, find its name"""
-    url = room_info_url.format(room_id=room_id)
-    res = requests.get(
-        url,
-        headers=header,
-    )
-    if res and res.status_code == 200:
-        res_json = res.json()
-        name = res_json.get("roomAttributes", {}).get("name")
-        if name:
-            return name
-        log.error(f"ERROR: malformed response from Symphony room info call to get name from id {room_id} via url {url}: {res_json}")
-    else:
-        log.error(f"ERROR: failed to query Symphony for room name from id {room_id} via url {url}: code {res.status_code} text {res.text}")
-
-
 def _get_user_mentions(payload):
     # try to extract user mentions
     user_mentions = []
@@ -208,41 +105,6 @@ def _get_user_mentions(payload):
                 user_mentions.append(user_id)
     finally:
         return user_mentions
-
-
-class SymphonyRoomMapper:
-    def __init__(self, room_search_url: str, room_info_url: str, header: Dict[str, str]):
-        self._name_to_id = {}
-        self._id_to_name = {}
-        self._room_search_url = room_search_url
-        self._room_info_url = room_info_url
-        self._header = header
-        self._lock = threading.Lock()
-
-    def get_room_id(self, room_name):
-        with self._lock:
-            if room_name in self._name_to_id:
-                return self._name_to_id[room_name]
-            else:
-                room_id = _get_room_id(room_name, self._room_search_url, self._header)
-                self._name_to_id[room_name] = room_id
-                self._id_to_name[room_id] = room_name
-                return room_id
-
-    def get_room_name(self, room_id):
-        with self._lock:
-            if room_id in self._id_to_name:
-                return self._id_to_name[room_id]
-            else:
-                room_name = _get_room_name(room_id, self._room_info_url, self._header)
-                self._name_to_id[room_name] = room_id
-                self._id_to_name[room_id] = room_name
-                return room_name
-
-    def set_im_id(self, user, id):
-        with self._lock:
-            self._id_to_name[id] = user
-            self._name_to_id[user] = id
 
 
 class SymphonyMessage(csp.Struct):
@@ -333,70 +195,49 @@ def _handle_event(event: dict, room_ids: set, room_mapper: SymphonyRoomMapper) -
 class SymphonyReaderPushAdapterImpl(PushInputAdapter):
     def __init__(
         self,
-        datafeed_create_url: str,
-        datafeed_delete_url: str,
-        datafeed_read_url: str,
-        message_create_url: str,
-        header: Dict[str, str],
+        config: SymphonyAdapterConfig,
         rooms: set,
         exit_msg: str = "",
         room_mapper: Optional[SymphonyRoomMapper] = None,
-        error_room: Optional[str] = None,
-        retry_decorator: Optional[Callable] = None,
     ):
         """Setup Symphony Reader
 
         Args:
-            datafeed_create_url (str): string path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds`
-            datafeed_delete_url (str): format-string path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds/{{datafeed_id}}`
-            datafeed_read_url (str): format-string path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds/{{datafeed_id}}/read`
-
-            room_search_url (str): format-string path to create datafeed, like `https://SYMPHONY_HOST/pod/v3/room/search`
-            room_info_url (str): format-string path to create datafeed, like `https://SYMPHONY_HOST/pod/v3/room/{{room_id}}/info`
-
-            header (Dict[str, str]): authentication headers
+            config (SymphonyAdapterConfig): Config specifying the url's to query symphony
 
             rooms (set): set of initial rooms for the bot to enter
             exit_msg (str): message to send on shutdown
             room_mapper (SymphonyRoomMapper): convenience object to map rooms that bot dynamically discovers
-            retry_decorator (Callable): Utility function to wrap functions with retry logic
         """
         self._thread = None
         self._running = False
+        self._config = config
 
         # message and datafeed
-        self._datafeed_create_url = datafeed_create_url
-        self._datafeed_delete_url = datafeed_delete_url
-        self._datafeed_read_url = datafeed_read_url
         self._datafeed_id: Optional[str] = None
-        self._message_create_url = message_create_url
-
-        # auth
-        self._header = header
 
         # rooms to enter by default
         self._rooms = rooms
         self._room_ids = set()
         self._exit_msg = exit_msg
+        if room_mapper is None:
+            room_mapper = SymphonyRoomMapper.from_config(config)
         self._room_mapper = room_mapper
-        self._error_room = error_room
-        self._retry_decorator = retry_decorator
 
     def _delete_datafeed_if_set(self):
         if self._datafeed_id is not None:
-            delete_url = self._datafeed_delete_url.format(datafeed_id=self._datafeed_id)
-            resp = requests.delete(url=delete_url, headers=self._header)
+            delete_url = self._config.datafeed_delete_url.format(datafeed_id=self._datafeed_id)
+            resp = requests.delete(url=delete_url, headers=self._config.header)
             log.info(f"Deleted datafeed with url={delete_url}: resp={resp}")
             self._datafeed_id = None
 
     def _set_new_datafeed(self):
-        # get symphony session
         self._delete_datafeed_if_set()
-        resp, datafeed_id = _get_or_create_datafeed(self._datafeed_create_url, self._header)
+        resp, datafeed_id = _get_or_create_datafeed(self._config.datafeed_create_url, self._config.header)
         if resp.status_code not in (200, 201, 204):
             raise Exception(f"ERROR: bad status ({resp.status_code}) from _get_or_create_datafeed, cannot start Symphony reader")
         else:
-            self._url = self._datafeed_read_url.format(datafeed_id=datafeed_id)
+            self._url = self._config.datafeed_read_url.format(datafeed_id=datafeed_id)
             self._datafeed_id = datafeed_id
 
     def start(self, starttime, endtime):
@@ -419,14 +260,14 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
             try:
                 self._delete_datafeed_if_set()
                 if self._exit_msg:
-                    send_symphony_message(self._exit_msg, next(iter(self._room_ids)), self._message_create_url, self._header)
+                    send_symphony_message(self._exit_msg, next(iter(self._room_ids)), self._config.message_create_url, self._config.header)
             except Exception:
                 log.exception("Error on sending exit message and deleting datafeed on shutdown")
             self._thread.join()
 
     def _get_new_ack_id_and_messages(self, ack_id: str) -> Tuple[str, List[SymphonyMessage]]:
         ret = []
-        resp = requests.post(url=self._url, headers=self._header, json={"ackId": ack_id})
+        resp = requests.post(url=self._url, headers=self._config.header, json={"ackId": ack_id})
         if resp.status_code == 400:
             # Bad datafeed, we need a new one
             self._set_new_datafeed()
@@ -445,9 +286,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
 
     def _run(self):
         ack_id = ""
-        get_new_messages_func = (
-            self._retry_decorator(self._get_new_ack_id_and_messages) if self._retry_decorator is not None else self._get_new_ack_id_and_messages
-        )
+        get_new_messages_func = self._config.get_retry_decorator()(self._get_new_ack_id_and_messages)
         while self._running:
             try:
                 ack_id, ret = get_new_messages_func(ack_id)
@@ -457,7 +296,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
                 error_msg = "An exception occured trying to interact with datafeed, max_attempts exceeded. Symphony Reader is shutting down..."
                 log.error(error_msg)
                 if self._error_room and (error_room_id := self._room_mapper.get_room_id(self._error_room)):
-                    send_symphony_message(error_msg, error_room_id, self._message_create_url, self._header)
+                    send_symphony_message(error_msg, error_room_id, self._config.message_create_url, self._config.header)
                 raise exc
             if ret:
                 self.push_tick(ret)
@@ -467,30 +306,23 @@ SymphonyReaderPushAdapter = py_push_adapter_def(
     "SymphonyReaderPushAdapter",
     SymphonyReaderPushAdapterImpl,
     ts[[SymphonyMessage]],
-    datafeed_create_url=str,
-    datafeed_delete_url=str,
-    datafeed_read_url=str,
-    message_create_url=str,
-    header=Dict[str, str],
+    config=object,
     rooms=set,
     exit_msg=str,
     room_mapper=object,
-    error_room=object,
-    retry_decorator=object,
 )
 
 
 def _send_messages(
     msg_queue: Queue,
-    header: Dict[str, str],
+    config: SymphonyAdapterConfig,
     room_mapper: SymphonyRoomMapper,
-    message_create_url: str,
-    error_room: Optional[str] = None,
-    inform_client: bool = False,
-    retry_decorator: Optional[Callable] = None,
 ):
-    """read messages from msg_queue and write to symphony. msg_queue to contain instances of SymphonyMessage, or None to shut down"""
-    send_message = retry_decorator(send_symphony_message) if retry_decorator is not None else send_symphony_message
+    """Read messages from msg_queue and write to symphony. msg_queue to contain instances of SymphonyMessage, or None to shut down"""
+    send_message = config.get_retry_decorator()(send_symphony_message)
+    message_create_url = config.message_create_url
+    header = config.header
+
     while True:
         msg = msg_queue.get()
         msg_queue.task_done()
@@ -506,7 +338,7 @@ def _send_messages(
             if msg_resp.status_code != 200:
                 error = f"Cannot send message to room: '{msg.room}' - received symphony server response: status_code: {msg_resp.status_code} text: '{msg_resp.text}'"
                 # let client know that an error occured
-                if inform_client:
+                if config.inform_client:
                     send_message(
                         "ERROR: Could not send messsage on Symphony",
                         room_id,
@@ -517,7 +349,7 @@ def _send_messages(
         if error is not None:
             log.error(error)
 
-            if error_room is not None and (error_room_id := room_mapper.get_room_id(error_room)):
+            if config.error_room is not None and (error_room_id := room_mapper.get_room_id(config.error_room)):
                 formatted_error = format_with_message_ml(error, to_message_ml=True)
 
                 # try to send full error message from Symphony, this might fail if not properly formatted
@@ -532,7 +364,7 @@ def _send_messages(
                 if error_msg_resp.status_code != 200:
                     # just log this error
                     log.error(
-                        f"Cannot send message to room {error_room} - received symphony server response: {error_msg_resp.status_code} {error_msg_resp.text}"
+                        f"Cannot send message to room {config.error_room} - received symphony server response: {error_msg_resp.status_code} {error_msg_resp.text}"
                     )
                     send_message(
                         f"A message failed to be sent via symphony to room {msg.room}, and the error message couldn't be properly displayed.",
@@ -545,95 +377,19 @@ def _send_messages(
 class SymphonyAdapter:
     def __init__(
         self,
-        auth_host: str,
-        session_auth_path: str,
-        key_auth_path: str,
-        message_create_url: str,
-        presence_url: str,
-        datafeed_create_url: str,
-        datafeed_delete_url: str,
-        datafeed_read_url: str,
-        room_search_url: str,
-        room_info_url: str,
-        cert_string: str,
-        key_string: str,
-        error_room: Optional[str] = None,
-        inform_client: bool = False,
-        max_attempts: int = 10,
-        initial_interval_ms: int = 500,
-        multiplier: float = 2.0,
-        max_interval_ms: int = 300000,
+        config: SymphonyAdapterConfig,
     ):
-        """Setup Symphony Reader
-
-        Args:
-            auth_host (str): authentication host, like `company-api.symphony.com`
-
-            session_auth_path (str): path to authenticate session, like `/sessionauth/v1/authenticate`
-            key_auth_path (str): path to authenticate key, like `/keyauth/v1/authenticate`
-
-            message_create_url (str): string path to create a message, like `https://SYMPHONY_HOST/agent/v4/stream/{{sid}}/message/create`
-            presence_url (str): string path to create a message, like `https://SYMPHONY_HOST/pod/v2/user/presence`
-            datafeed_create_url (str): string path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds`
-            datafeed_delete_url (str): format-string path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds/{{datafeed_id}}`
-            datafeed_read_url (str): format-string path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds/{{datafeed_id}}/read`
-
-            room_search_url (str): format-string path to create datafeed, like `https://SYMPHONY_HOST/pod/v3/room/search`
-            room_info_url (str): format-string path to create datafeed, like `https://SYMPHONY_HOST/pod/v3/room/{{room_id}}/info`
-
-            cert_string (str): pem format string of client certificate
-            key_string (str): pem format string of client private key
-            error_room (Optional[str]): A room to direct error messages to, if a message fails to be sent over symphony, or if the SymphonyReaderPushAdapter crashes
-            inform_client (bool): Whether to inform the intended recipient of a failed message that the message failed
-            rooms (set): set of initial rooms for the bot to enter
-
-            max_attempts (int): Max attempts for datafeed and message post requests before raising exception. If -1, no maximum
-            initial_interval_ms (int): Initial interval to wait between attempts, in milliseconds
-            multiplier (float): Multiplier between attempt delays for exponential backoff
-            max_interval_ms (int): Maximum delay between retry attempts, in milliseconds
-        """
-        self._auth_host = auth_host
-        self._session_auth_path = session_auth_path
-        self._key_auth_path = key_auth_path
-        self._message_create_url = message_create_url
-        self._presence_url = presence_url
-        self._datafeed_create_url = datafeed_create_url
-        self._datafeed_delete_url = datafeed_delete_url
-        self._datafeed_read_url = datafeed_read_url
-        self._room_search_url = room_search_url
-        self._room_info_url = room_info_url
-        self._cert_string = cert_string
-        self._key_string = key_string
-        self._header = _symphony_session(self._auth_host, self._session_auth_path, self._key_auth_path, self._cert_string, self._key_string)
-        self._room_mapper = SymphonyRoomMapper(self._room_search_url, self._room_info_url, self._header)
-        self._error_room = error_room
-        self._inform_client = inform_client
-
-        exp_wait = tenacity.wait_exponential(
-            min=timedelta(milliseconds=initial_interval_ms), max=timedelta(milliseconds=max_interval_ms), multiplier=multiplier
-        )
-        stop = tenacity.stop_after_attempt(max_attempts) if max_attempts != -1 else tenacity.stop_never
-        self._retry_decorator = tenacity.retry(
-            reraise=True,
-            stop=stop,
-            wait=exp_wait,
-            retry=tenacity.retry_if_exception_type(requests.RequestException),
-            before_sleep=tenacity.before_sleep_log(log, logging.DEBUG),
-        )
+        """Setup Symphony Adapter"""
+        self._config = config
+        self._room_mapper = SymphonyRoomMapper.from_config(config)
 
     @csp.graph
     def subscribe(self, rooms: set = set(), exit_msg: str = "") -> ts[[SymphonyMessage]]:
         return SymphonyReaderPushAdapter(
-            datafeed_create_url=self._datafeed_create_url,
-            datafeed_delete_url=self._datafeed_delete_url,
-            datafeed_read_url=self._datafeed_read_url,
-            message_create_url=self._message_create_url,
-            header=self._header,
+            config=self._config,
             rooms=rooms,
             exit_msg=exit_msg,
             room_mapper=self._room_mapper,
-            error_room=self._error_room,
-            retry_decorator=self._retry_decorator,
         )
 
     # take in SymphonyMessage and send to symphony on separate thread
@@ -649,12 +405,8 @@ class SymphonyAdapter:
                 target=_send_messages,
                 args=(
                     s_queue,
-                    self._header,
+                    self._config,
                     self._room_mapper,
-                    self._message_create_url,
-                    self._error_room,
-                    self._inform_client,
-                    self._retry_decorator,
                 ),
             )
             s_thread.start()
@@ -669,9 +421,9 @@ class SymphonyAdapter:
             s_queue.put(msg)
 
     @csp.node
-    def _set_presense(self, presence: ts[Presence], timeout: float = 5.0):
+    def _set_presence(self, presence: ts[Presence], timeout: float = 5.0):
         try:
-            ret = requests.post(url=self._presence_url, json={"category": presence.name}, headers=self._header, timeout=timeout)
+            ret = requests.post(url=self._config.presence_url, json={"category": presence.name}, headers=self._config.header, timeout=timeout)
             if ret.status_code != 200:
                 log.error(f"Cannot set presence - symphony server response: {ret.status_code} {ret.text}")
         except Exception:
@@ -679,7 +431,7 @@ class SymphonyAdapter:
 
     @csp.graph
     def publish_presence(self, presence: ts[Presence], timeout: float = 5.0):
-        self._set_presense(presence=presence, timeout=timeout)
+        self._set_presence(presence=presence, timeout=timeout)
 
     @csp.graph
     def publish(self, msg: ts[SymphonyMessage]):
