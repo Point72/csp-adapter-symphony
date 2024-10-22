@@ -4,8 +4,15 @@ from csp import ts
 from time import sleep
 from unittest.mock import MagicMock, call, patch
 
-from csp_adapter_symphony import SymphonyAdapter, SymphonyMessage, SymphonyRoomMapper, format_with_message_ml, mention_user, send_symphony_message
+from csp_adapter_symphony import (
+    SymphonyAdapter,
+    SymphonyMessage,
+    format_with_message_ml,
+    mention_user,
+    send_symphony_message,
+)
 from csp_adapter_symphony.adapter import _handle_event
+from csp_adapter_symphony.adapter_config import SymphonyAdapterConfig, SymphonyRoomMapper
 
 
 SAMPLE_EVENTS = [
@@ -185,7 +192,7 @@ class TestSymphony:
             patch("requests.delete") as requests_delete_mock,
             patch("ssl.SSLContext") as ssl_context_mock,
             patch("http.client.HTTPSConnection") as https_client_connection_mock,
-            patch("csp_adapter_symphony.adapter.NamedTemporaryFile") as named_temporary_file_mock,
+            patch("csp_adapter_symphony.adapter_config.NamedTemporaryFile") as named_temporary_file_mock,
         ):
             # mock https connection
             https_connection_mock = MagicMock()
@@ -245,29 +252,29 @@ class TestSymphony:
                 return resp_mock
 
             requests_post_mock.side_effect = post_request
-
-            # instantiate
-            adapter = SymphonyAdapter(
-                "auth.host",
-                "/sessionauth/v1/authenticate",
-                "/keyauth/v1/authenticate",
-                "https://symphony.host/agent/v4/stream/{{sid}}/message/create",
-                "https://symphony.host/pod/v2/user/presence",
-                "https://symphony.host/agent/v5/datafeeds",
-                "https://symphony.host/agent/v5/datafeeds/{{datafeed_id}}",
-                "https://symphony.host/agent/v5/datafeeds/{{datafeed_id}}/read",
-                "https://symphony.host/pod/v3/room/search",
-                "https://symphony.host/pod/v3/room/{{room_id}}/info",
-                "my_cert_string",
-                "my_key_string",
+            config = SymphonyAdapterConfig(
+                auth_host="auth.host",
+                session_auth_path="/sessionauth/v1/authenticate",
+                key_auth_path="/keyauth/v1/authenticate",
+                message_create_url="https://symphony.host/agent/v4/stream/{{sid}}/message/create",
+                presence_url="https://symphony.host/pod/v2/user/presence",
+                datafeed_create_url="https://symphony.host/agent/v5/datafeeds",
+                datafeed_delete_url="https://symphony.host/agent/v5/datafeeds/{{datafeed_id}}",
+                datafeed_read_url="https://symphony.host/agent/v5/datafeeds/{{datafeed_id}}/read",
+                room_search_url="https://symphony.host/pod/v3/room/search",
+                room_info_url="https://symphony.host/pod/v3/room/{{room_id}}/info",
+                cert_string="BEGIN CERTIFICATE:my_cert_string",  # hack to bypass file opening
+                key_string="BEGIN PRIVATE KEY:my_key_string",  # hack to bypass file opening
                 error_room=None if not inform_client else "another sample room",
                 inform_client=inform_client,
             )
+            # instantiate
+            adapter = SymphonyAdapter(config)
 
             # assert auth worked properly to get token
             assert named_temporary_file_mock.return_value.__enter__.return_value.write.call_args_list == [
-                call("my_cert_string"),
-                call("my_key_string"),
+                call("BEGIN CERTIFICATE:my_cert_string"),
+                call("BEGIN PRIVATE KEY:my_key_string"),
             ]
             assert ssl_context_mock.return_value.load_cert_chain.call_args_list == [
                 # session token
