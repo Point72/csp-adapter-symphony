@@ -43,11 +43,11 @@ dependencies = [
 develop = [
     "bump-my-version",
     "check-manifest",
-    "codespell>=2.2.6,<2.3",
+    "codespell>=2.3,<2.4",
     "hatchling",
-    "mdformat>=0.7.17,<0.8",
-    "ruff>=0.5,<0.6",
-    "twine>=5,<5.2",
+    "mdformat>=0.7.18,<0.8",
+    "ruff>=0.6,<0.7",
+    "twine>=5,<6",
     # test
     "pytest",
     "pytest-cov",
