@@ -80,6 +80,19 @@ replace = 'version = "{new_version}"'
 [tool.check-manifest]
 ignore = []
 
+[tool.coverage.run]
+branch = true
+omit = []
+
+[tool.coverage.report]
+exclude_also = [
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+]
+ignore_errors = true
+fail_under = 75
+
 [tool.hatch.build]
 artifacts = []
 
@@ -110,14 +123,15 @@ exclude = [
 ]
 
 [tool.pytest.ini_options]
+addopts = ["-vvv", "--junitxml=junit.xml"]
 asyncio_mode = "strict"
 testpaths = "csp_adapter_symphony/tests"
 
 [tool.ruff]
 line-length = 150
 
-[tool.ruff.lint.per-file-ignores]
-"__init__.py" = ["F401", "F403"]
+[tool.ruff.lint]
+extend-select = ["I"]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
@@ -125,7 +139,11 @@ default-section = "third-party"
 known-first-party = ["csp_adapter_symphony"]
 section-order = [
     "future",
+    "standard-library",
     "third-party",
     "first-party",
     "local-folder",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403"]
