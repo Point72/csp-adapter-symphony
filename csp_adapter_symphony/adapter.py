@@ -1,14 +1,15 @@
-import csp
 import json
 import logging
-import requests
 import threading
+from queue import Queue
+from typing import Dict, List, Optional, Tuple
+
+import csp
+import requests
 from csp import ts
 from csp.impl.enum import Enum
 from csp.impl.pushadapter import PushInputAdapter
 from csp.impl.wiring import py_push_adapter_def
-from queue import Queue
-from typing import Dict, List, Optional, Tuple
 
 from .adapter_config import SymphonyAdapterConfig, SymphonyRoomMapper
 

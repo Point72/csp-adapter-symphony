@@ -1,15 +1,16 @@
 import http.client
 import json
 import logging
-import requests
 import ssl
 import threading
-import tenacity
 from datetime import timedelta
 from functools import cached_property
-from pydantic import BaseModel, computed_field, Field, field_validator, FilePath
 from tempfile import NamedTemporaryFile
 from typing import Callable, Dict, List, Optional, Union
+
+import requests
+import tenacity
+from pydantic import BaseModel, Field, FilePath, computed_field, field_validator
 
 __all__ = ("SymphonyAdapterConfig", "SymphonyRoomMapper")
 

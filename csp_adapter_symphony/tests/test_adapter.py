@@ -1,8 +1,9 @@
+from time import sleep
+from unittest.mock import MagicMock, call, patch
+
 import csp
 import pytest
 from csp import ts
-from time import sleep
-from unittest.mock import MagicMock, call, patch
 
 from csp_adapter_symphony import (
     SymphonyAdapter,
@@ -13,7 +14,6 @@ from csp_adapter_symphony import (
 )
 from csp_adapter_symphony.adapter import _handle_event
 from csp_adapter_symphony.adapter_config import SymphonyAdapterConfig, SymphonyRoomMapper
-
 
 SAMPLE_EVENTS = [
     {
