@@ -45,7 +45,8 @@ develop = [
     "check-manifest",
     "codespell>=2.3,<2.4",
     "hatchling",
-    "mdformat>=0.7.18,<0.8",
+    "mdformat>=0.7.19,<0.8",
+    "mdformat-tables>=1,<1.1",
     "ruff>=0.6,<0.8",
     "twine>=5,<6",
     # test
