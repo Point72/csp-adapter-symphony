@@ -161,9 +161,6 @@ class SymphonyRoomMapper:
 
 
 def _client_cert_post(host: str, request_url: str, cert_file: str, key_file: str) -> str:
-    request_headers = {"Content-Type": "application/json"}
-    request_body_dict = {}
-
     # Define the client certificate settings for https connection
     context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
     context.load_cert_chain(certfile=cert_file, keyfile=key_file)
@@ -172,7 +169,9 @@ def _client_cert_post(host: str, request_url: str, cert_file: str, key_file: str
     connection = http.client.HTTPSConnection(host, port=443, context=context)
 
     # Use connection to submit a HTTP POST request
-    connection.request(method="POST", url=request_url, headers=request_headers, body=json.dumps(request_body_dict))
+    # Note that we omit content-type headers and the request body per Symphony's docs here:
+    # https://rest-api.symphony.com/main/bot-authentication/session-authenticate
+    connection.request(method="POST", url=request_url, headers={})
 
     # Print the HTTP response from the IOT service endpoint
     response = connection.getresponse()

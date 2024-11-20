@@ -61,11 +61,11 @@ make build
 
 `csp-adapter-symphony` has linting and auto formatting.
 
-| Language | Linter      | Autoformatter | Description |
+| Language | Linter | Autoformatter | Description |
 | :------- | :---- ----- | :------------ | :---------- |
-| Python   | `ruff`      | `ruff`        | Style       |
-| Markdown | `mdformat`  | `mdformat`    | Style       |
-| Markdown | `codespell` |               | Spelling    |
+| Python | `ruff` | `ruff` | Style |
+| Markdown | `mdformat` | `mdformat` | Style |
+| Markdown | `codespell` | | Spelling |
 
 **Python Linting**
 
