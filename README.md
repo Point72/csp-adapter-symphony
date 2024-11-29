@@ -9,6 +9,8 @@ A [csp](https://github.com/point72/csp) adapter for [symphony](https://symphony.
 
 ## Features
 
+The Symphony adapter allows for reading and writing of messages from the [Symphony](https://symphony.com/) message platform using [`requests`](https://requests.readthedocs.io/en/latest/) and the [Symphony SDK](https://docs.developers.symphony.com/).
+
 [More information is available in our wiki](https://github.com/Point72/csp-adapter-symphony/wiki)
 
 ## Installation
