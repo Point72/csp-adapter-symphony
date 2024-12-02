@@ -13,7 +13,7 @@ from csp.impl.wiring import py_push_adapter_def
 
 from .adapter_config import SymphonyAdapterConfig, SymphonyRoomMapper
 
-__all__ = ("SymphonyAdapter", "SymphonyMessage", "mention_user", "send_symphony_message", "format_with_message_ml")
+__all__ = ("Presence", "SymphonyAdapter", "SymphonyMessage", "mention_user", "send_symphony_message", "format_with_message_ml")
 
 log = logging.getLogger(__file__)
 
