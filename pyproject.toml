@@ -30,6 +30,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: Apache Software License",
 ]
 dependencies = [
@@ -101,11 +102,7 @@ artifacts = []
 src = "/"
 
 [tool.hatch.build.targets.sdist]
-include = [
-    "/csp_adapter_symphony",
-    "LICENSE",
-    "README.md",
-]
+packages = ["csp_adapter_symphony"]
 exclude = [
     "/.github",
     "/.gitignore",
@@ -113,9 +110,7 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel]
-include = [
-    "/csp_adapter_symphony",
-]
+packages = ["csp_adapter_symphony"]
 exclude = [
     "/.github",
     "/.gitignore",
