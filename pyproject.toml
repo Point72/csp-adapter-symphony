@@ -48,7 +48,7 @@ develop = [
     "hatchling",
     "mdformat>=0.7.19,<0.8",
     "mdformat-tables>=1,<1.1",
-    "ruff>=0.6,<0.9",
+    "ruff>=0.6,<0.10",
     "twine>=5,<7",
     # test
     "pytest",
