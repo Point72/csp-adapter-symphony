@@ -113,7 +113,6 @@ packages = ["csp_adapter_symphony"]
 exclude = [
     "/.github",
     "/.gitignore",
-    "/pyproject.toml",
     "/docs",
 ]
 

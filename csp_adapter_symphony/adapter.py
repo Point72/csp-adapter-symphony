@@ -12,37 +12,11 @@ from csp.impl.pushadapter import PushInputAdapter
 from csp.impl.wiring import py_push_adapter_def
 
 from .adapter_config import SymphonyAdapterConfig, SymphonyRoomMapper
+from .message import SymphonyMessage, format_with_message_ml
 
-__all__ = ("Presence", "SymphonyAdapter", "SymphonyMessage", "mention_user", "send_symphony_message", "format_with_message_ml")
+__all__ = ("Presence", "SymphonyAdapter", "send_symphony_message")
 
 log = logging.getLogger(__file__)
-
-
-def format_with_message_ml(text, to_message_ml: bool = True) -> str:
-    """If to_message_ml, we convert to message ml by replacing special sequences of character. Else, we convert from message_ml in the same way"""
-    pairs = [
-        ("&", "&#38;"),
-        ("<", "&lt;"),
-        ("${", "&#36;{"),
-        ("#{", "&#35;{"),
-    ]
-
-    for original, msg_ml_version in pairs:
-        if to_message_ml:
-            text = text.replace(original, msg_ml_version)
-        else:
-            text = text.replace(msg_ml_version, original)
-
-    return text
-
-
-def mention_user(email_or_userid: str = ""):
-    if email_or_userid:
-        if "@" in str(email_or_userid):
-            return f'<mention email="{email_or_userid}" />'
-        else:
-            return f'<mention uid="{email_or_userid}" />'
-    return ""
 
 
 def _sync_create_data_feed(datafeed_create_url: str, header: Dict[str, str]) -> Tuple[requests.Response, str]:
@@ -106,17 +80,6 @@ def _get_user_mentions(payload):
                 user_mentions.append(user_id)
     finally:
         return user_mentions
-
-
-class SymphonyMessage(csp.Struct):
-    user: str
-    user_email: str  # email of the author, for mentions
-    user_id: str  # uid of the author, for mentions
-    tags: List[str]  # list of user ids in message, for mentions
-    room: str
-    msg: str
-    form_id: str
-    form_values: dict
 
 
 def _handle_event(event: dict, room_ids: set, room_mapper: SymphonyRoomMapper) -> Optional[SymphonyMessage]:

@@ -24,9 +24,9 @@ class SymphonyAdapterConfig(BaseModel):
     session_auth_path: str = Field(descrption="Path to authenticate session, like `/sessionauth/v1/authenticate`")
     key_auth_path: str = Field(description="Path to authenticate key, like `/keyauth/v1/authenticate`")
     message_create_url: str = Field(
-        description="String path to create a message, like `https://SYMPHONY_HOST/agent/v4/stream/{{sid}}/message/create`"
+        description="Format-string path to create a message, like `https://SYMPHONY_HOST/agent/v4/stream/{{sid}}/message/create`"
     )
-    presence_url: str = Field(description="String path to create a message, like `https://SYMPHONY_HOST/pod/v2/user/presence`")
+    presence_url: str = Field(description="String path to set presence information, like `https://SYMPHONY_HOST/pod/v2/user/presence`")
     datafeed_create_url: str = Field(description="String path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds`")
     datafeed_delete_url: str = Field(
         description="Format-string path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds/{{datafeed_id}}`"
@@ -39,8 +39,10 @@ class SymphonyAdapterConfig(BaseModel):
     room_members_url: Optional[str] = Field(
         None, description="Format-string path to get room members in a room, like `https://SYMPHONY_HOST/pod/v2/room/{{room_id}}/membership/list`"
     )
-    cert_string: Union[str, FilePath] = Field(description="Pem format string of client certificate")
-    key_string: Union[str, FilePath] = Field(description="Pem format string of client private key")
+
+    cert: Union[str, FilePath] = Field(description="Pem format string of client certificate")
+    key: Union[str, FilePath] = Field(description="Pem format string of client private key")
+
     error_room: Optional[str] = Field(
         None,
         description="A room to direct error messages to, if a message fails to be sent over symphony, or if the SymphonyReaderPushAdapter crashes",
@@ -51,14 +53,14 @@ class SymphonyAdapterConfig(BaseModel):
     multiplier: float = Field(2.0, description="Multiplier between attempt delays for exponential backoff")
     max_interval_ms: int = Field(300000, description="Maximum delay between retry attempts, in milliseconds")
 
-    @field_validator("cert_string")
+    @field_validator("cert")
     def load_cert_if_file(cls, v):
         if "BEGIN CERTIFICATE" in v:
             return v
         with open(v, "r") as fp:
             return fp.read()
 
-    @field_validator("key_string")
+    @field_validator("key")
     def load_key_if_file(cls, v):
         if "BEGIN PRIVATE KEY" in v:
             return v
@@ -75,8 +77,8 @@ class SymphonyAdapterConfig(BaseModel):
             auth_host=self.auth_host,
             session_auth_path=self.session_auth_path,
             key_auth_path=self.key_auth_path,
-            cert_string=self.cert_string,
-            key_string=self.key_string,
+            cert_string=self.cert,
+            key_string=self.key,
         )
 
     def get_retry_decorator(self) -> Callable:

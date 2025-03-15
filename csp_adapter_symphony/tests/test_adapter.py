@@ -263,8 +263,8 @@ class TestSymphony:
                 datafeed_read_url="https://symphony.host/agent/v5/datafeeds/{{datafeed_id}}/read",
                 room_search_url="https://symphony.host/pod/v3/room/search",
                 room_info_url="https://symphony.host/pod/v3/room/{{room_id}}/info",
-                cert_string="BEGIN CERTIFICATE:my_cert_string",  # hack to bypass file opening
-                key_string="BEGIN PRIVATE KEY:my_key_string",  # hack to bypass file opening
+                cert="BEGIN CERTIFICATE:my_cert_string",  # hack to bypass file opening
+                key="BEGIN PRIVATE KEY:my_key_string",  # hack to bypass file opening
                 error_room=None if not inform_client else "another sample room",
                 inform_client=inform_client,
             )

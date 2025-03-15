@@ -23,6 +23,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Make home file
+        run: cp README.md docs/wiki/Home.md
+        
       - name: Upload Documentation to Wiki
         uses: Andrew-Chen-Wang/github-wiki-action@v4
         with:
