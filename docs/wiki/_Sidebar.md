@@ -11,11 +11,9 @@ Notes for editors:
 **Get Started**
 
 - [Installation](Installation)
-- [First steps](First-Steps)
-
-**References**
-
+- [Setup](Setup)
 - [API Reference](API-Reference)
+- [Examples](Examples)
 
 **Developer Guide**
 
