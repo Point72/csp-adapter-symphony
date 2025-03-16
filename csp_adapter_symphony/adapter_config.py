@@ -10,7 +10,7 @@ from typing import Callable, Dict, List, Optional, Union
 
 import requests
 import tenacity
-from pydantic import BaseModel, Field, FilePath, computed_field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, FilePath, computed_field, field_validator
 
 __all__ = ("SymphonyAdapterConfig", "SymphonyRoomMapper")
 
@@ -40,8 +40,8 @@ class SymphonyAdapterConfig(BaseModel):
         None, description="Format-string path to get room members in a room, like `https://SYMPHONY_HOST/pod/v2/room/{{room_id}}/membership/list`"
     )
 
-    cert: Union[str, FilePath] = Field(description="Pem format string of client certificate")
-    key: Union[str, FilePath] = Field(description="Pem format string of client private key")
+    cert: Union[str, FilePath] = Field(description="Pem format string of client certificate", validation_alias=AliasChoices("cert", "cert_string"))
+    key: Union[str, FilePath] = Field(description="Pem format string of client private key", validation_alias=AliasChoices("key", "key_string"))
 
     error_room: Optional[str] = Field(
         None,

@@ -183,6 +183,25 @@ class TestSymphony:
         assert format_with_message_ml(input_text) == input_text
         assert format_with_message_ml(input_text, to_message_ml=False) == input_text
 
+    def test_symphony_config_aliases(self):
+        config = SymphonyAdapterConfig(
+            auth_host="auth.host",
+            session_auth_path="/sessionauth/v1/authenticate",
+            key_auth_path="/keyauth/v1/authenticate",
+            message_create_url="https://symphony.host/agent/v4/stream/{{sid}}/message/create",
+            presence_url="https://symphony.host/pod/v2/user/presence",
+            datafeed_create_url="https://symphony.host/agent/v5/datafeeds",
+            datafeed_delete_url="https://symphony.host/agent/v5/datafeeds/{{datafeed_id}}",
+            datafeed_read_url="https://symphony.host/agent/v5/datafeeds/{{datafeed_id}}/read",
+            room_search_url="https://symphony.host/pod/v3/room/search",
+            room_info_url="https://symphony.host/pod/v3/room/{{room_id}}/info",
+            # Use aliases
+            cert_string="BEGIN CERTIFICATE:my_cert_string",
+            key_string="BEGIN PRIVATE KEY:my_key_string",
+        )
+        assert config.cert == "BEGIN CERTIFICATE:my_cert_string"
+        assert config.key == "BEGIN PRIVATE KEY:my_key_string"
+
     @pytest.mark.parametrize("existing_datafeed", [True, False])
     @pytest.mark.parametrize("inform_client", [True, False])
     def test_symphony_instantiation(self, existing_datafeed, inform_client, caplog):
