@@ -20,8 +20,8 @@ log = logging.getLogger(__file__)
 class SymphonyAdapterConfig(BaseModel):
     """A config class that holds the required information to interact with Symphony. Includes helper methods to make REST API calls to Symphony."""
 
-    auth_host: str = Field(descrption="Authentication host, like `company-api.symphony.com`")
-    session_auth_path: str = Field(descrption="Path to authenticate session, like `/sessionauth/v1/authenticate`")
+    auth_host: str = Field(description="Authentication host, like `company-api.symphony.com`")
+    session_auth_path: str = Field(description="Path to authenticate session, like `/sessionauth/v1/authenticate`")
     key_auth_path: str = Field(description="Path to authenticate key, like `/keyauth/v1/authenticate`")
     message_create_url: str = Field(
         description="Format-string path to create a message, like `https://SYMPHONY_HOST/agent/v4/stream/{{sid}}/message/create`"
