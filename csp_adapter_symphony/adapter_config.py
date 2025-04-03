@@ -7,10 +7,11 @@ from datetime import timedelta
 from functools import cached_property
 from tempfile import NamedTemporaryFile
 from typing import Callable, Dict, List, Optional, Union
+from urllib.parse import urljoin
 
 import requests
 import tenacity
-from pydantic import AliasChoices, BaseModel, Field, FilePath, computed_field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, FilePath, computed_field, field_validator, model_validator
 
 __all__ = ("SymphonyAdapterConfig", "SymphonyRoomMapper")
 
@@ -20,22 +21,24 @@ log = logging.getLogger(__file__)
 class SymphonyAdapterConfig(BaseModel):
     """A config class that holds the required information to interact with Symphony. Includes helper methods to make REST API calls to Symphony."""
 
+    symphony_host: str = Field("", description="Base URL for Symphony, like `company.symphony.com`")
     auth_host: str = Field(description="Authentication host, like `company-api.symphony.com`")
-    session_auth_path: str = Field(description="Path to authenticate session, like `/sessionauth/v1/authenticate`")
-    key_auth_path: str = Field(description="Path to authenticate key, like `/keyauth/v1/authenticate`")
+    session_auth_path: str = Field("/sessionauth/v1/authenticate", description="Path to authenticate session, like `/sessionauth/v1/authenticate`")
+    key_auth_path: str = Field("/keyauth/v1/authenticate", description="Path to authenticate key, like `/keyauth/v1/authenticate`")
     message_create_url: str = Field(
-        description="Format-string path to create a message, like `https://SYMPHONY_HOST/agent/v4/stream/{{sid}}/message/create`"
+        "", description="Format-string path to create a message, like `https://SYMPHONY_HOST/agent/v4/stream/{sid}/message/create`"
     )
-    presence_url: str = Field(description="String path to set presence information, like `https://SYMPHONY_HOST/pod/v2/user/presence`")
-    datafeed_create_url: str = Field(description="String path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds`")
+    presence_url: str = Field("", description="String path to set presence information, like `https://SYMPHONY_HOST/pod/v2/user/presence`")
+    datafeed_create_url: str = Field("", description="String path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds`")
     datafeed_delete_url: str = Field(
-        description="Format-string path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds/{{datafeed_id}}`"
+        "", description="Format-string path to delete datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds/{datafeed_id}`"
     )
     datafeed_read_url: str = Field(
-        description="Format-string path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds/{{datafeed_id}}/read`"
+        "", description="Format-string path to listen to datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds/{datafeed_id}/read`"
     )
-    room_search_url: str = Field(description="Format-string path to create datafeed, like `https://SYMPHONY_HOST/pod/v3/room/search`")
-    room_info_url: str = Field(description="Format-string path to create datafeed, like `https://SYMPHONY_HOST/pod/v3/room/{{room_id}}/info`")
+    room_search_url: str = Field("", description="Format-string path to search rooms, like `https://SYMPHONY_HOST/pod/v3/room/search`")
+    room_info_url: str = Field("", description="Format-string path to get room info, like `https://SYMPHONY_HOST/pod/v3/room/{room_id}/info`")
+    im_create_url: str = Field("", description="Format-string path to create instant message channel, like `https://SYMPHONY_HOST/pod/v1/im/create`")
     room_members_url: Optional[str] = Field(
         None, description="Format-string path to get room members in a room, like `https://SYMPHONY_HOST/pod/v2/room/{{room_id}}/membership/list`"
     )
@@ -52,6 +55,34 @@ class SymphonyAdapterConfig(BaseModel):
     initial_interval_ms: int = Field(500, description="Initial interval to wait between attempts, in milliseconds")
     multiplier: float = Field(2.0, description="Multiplier between attempt delays for exponential backoff")
     max_interval_ms: int = Field(300000, description="Maximum delay between retry attempts, in milliseconds")
+
+    _default_endpoints = {
+        "message_create_url": "/agent/v4/stream/{sid}/message/create",
+        "presence_url": "/pod/v2/user/presence",
+        "datafeed_create_url": "/agent/v5/datafeeds",
+        "datafeed_delete_url": "/agent/v5/datafeeds/{datafeed_id}",
+        "datafeed_read_url": "/agent/v5/datafeeds/{datafeed_id}/read",
+        "room_search_url": "/pod/v3/room/search",
+        "room_info_url": "/pod/v3/room/{room_id}/info",
+        "im_create_url": "/pod/v1/im/create",
+    }
+
+    @model_validator(mode="after")
+    def validate_and_set_urls(self) -> "SymphonyAdapterConfig":
+        symphony_host = self.symphony_host
+
+        missing_urls = [field_name for field_name in self._default_endpoints if not getattr(self, field_name)]
+
+        if missing_urls and not symphony_host:
+            raise ValueError(f"symphony_host must be set if the following urls are not provided: {', '.join(missing_urls)}")
+
+        if not symphony_host.startswith(("http://", "https://")):
+            symphony_host = f"https://{symphony_host}"
+
+        for field_name in missing_urls:
+            setattr(self, field_name, urljoin(symphony_host, self._default_endpoints[field_name]))
+
+        return self
 
     @field_validator("cert")
     def load_cert_if_file(cls, v):

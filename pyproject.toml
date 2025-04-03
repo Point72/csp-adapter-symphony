@@ -83,7 +83,9 @@ ignore = []
 
 [tool.coverage.run]
 branch = true
-omit = []
+omit = [
+    "setup.py",
+]
 
 [tool.coverage.report]
 exclude_also = [
