@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from time import sleep
 from unittest.mock import MagicMock, call, patch
 
@@ -37,13 +38,21 @@ SAMPLE_EVENTS = [
 
 
 @csp.node
-def hello(msg: ts[SymphonyMessage]) -> ts[SymphonyMessage]:
+def hello(msg: ts[SymphonyMessage]) -> ts[[SymphonyMessage]]:
     if csp.ticked(msg):
         text = f"Hello <@{msg.user_id}>!"
-        return SymphonyMessage(
-            room="another sample room",
-            msg=text,
-        )
+        return [
+            SymphonyMessage(
+                room="another sample room",
+                msg=text,
+            ),
+            SymphonyMessage(
+                user_id=msg.user_id,
+                msg="Hello!",
+                room="IM",
+            ),
+            SymphonyMessage(),
+        ]
 
 
 class TestSymphony:
@@ -195,12 +204,61 @@ class TestSymphony:
             datafeed_read_url="https://symphony.host/agent/v5/datafeeds/{{datafeed_id}}/read",
             room_search_url="https://symphony.host/pod/v3/room/search",
             room_info_url="https://symphony.host/pod/v3/room/{{room_id}}/info",
+            im_create_url="https://symphony.host/pod/v1/im/create",
             # Use aliases
             cert_string="BEGIN CERTIFICATE:my_cert_string",
             key_string="BEGIN PRIVATE KEY:my_key_string",
         )
         assert config.cert == "BEGIN CERTIFICATE:my_cert_string"
         assert config.key == "BEGIN PRIVATE KEY:my_key_string"
+
+    @pytest.mark.parametrize("symphony_host", ["https://company.symphony.com", "company.symphony.com/"])
+    def test_symphony_config_default_urls(self, symphony_host):
+        config = SymphonyAdapterConfig(
+            symphony_host=symphony_host,
+            auth_host="auth.host",
+            cert="BEGIN CERTIFICATE:my_cert_string",
+            key="BEGIN PRIVATE KEY:my_key_string",
+        )
+        assert config.auth_host == "auth.host"
+        assert config.session_auth_path == "/sessionauth/v1/authenticate"
+        assert config.key_auth_path == "/keyauth/v1/authenticate"
+        assert config.message_create_url == "https://company.symphony.com/agent/v4/stream/{sid}/message/create"
+        assert config.presence_url == "https://company.symphony.com/pod/v2/user/presence"
+        assert config.datafeed_create_url == "https://company.symphony.com/agent/v5/datafeeds"
+        assert config.datafeed_delete_url == "https://company.symphony.com/agent/v5/datafeeds/{datafeed_id}"
+        assert config.datafeed_read_url == "https://company.symphony.com/agent/v5/datafeeds/{datafeed_id}/read"
+        assert config.room_search_url == "https://company.symphony.com/pod/v3/room/search"
+        assert config.room_info_url == "https://company.symphony.com/pod/v3/room/{room_id}/info"
+        assert config.im_create_url == "https://company.symphony.com/pod/v1/im/create"
+
+    def test_symphony_config_fills_missing_urls_with_defaults(self):
+        config = SymphonyAdapterConfig(
+            symphony_host="https://company.symphony.com",
+            auth_host="auth.host",
+            cert="BEGIN CERTIFICATE:my_cert_string",
+            key="BEGIN PRIVATE KEY:my_key_string",
+            presence_url="custom.url/api/presence",
+        )
+        assert config.auth_host == "auth.host"
+        assert config.session_auth_path == "/sessionauth/v1/authenticate"
+        assert config.key_auth_path == "/keyauth/v1/authenticate"
+        assert config.message_create_url == "https://company.symphony.com/agent/v4/stream/{sid}/message/create"
+        assert config.presence_url == "custom.url/api/presence"
+        assert config.datafeed_create_url == "https://company.symphony.com/agent/v5/datafeeds"
+        assert config.datafeed_delete_url == "https://company.symphony.com/agent/v5/datafeeds/{datafeed_id}"
+        assert config.datafeed_read_url == "https://company.symphony.com/agent/v5/datafeeds/{datafeed_id}/read"
+        assert config.room_search_url == "https://company.symphony.com/pod/v3/room/search"
+        assert config.room_info_url == "https://company.symphony.com/pod/v3/room/{room_id}/info"
+        assert config.im_create_url == "https://company.symphony.com/pod/v1/im/create"
+
+    def test_symphony_config_missing_symphony_host(self):
+        with pytest.raises(ValueError, match=".*symphony_host must be set.*"):
+            _config = SymphonyAdapterConfig(
+                auth_host="auth.host",
+                cert="BEGIN CERTIFICATE:my_cert_string",
+                key="BEGIN PRIVATE KEY:my_key_string",
+            )
 
     @pytest.mark.parametrize("existing_datafeed", [True, False])
     @pytest.mark.parametrize("inform_client", [True, False])
@@ -249,6 +307,8 @@ class TestSymphony:
                     "https://symphony.host/pod/v3/room/search",
                     # send message
                     "https://symphony.host/agent/v4/stream/{sid}/message/create",
+                    # create im
+                    "https://symphony.host/pod/v1/im/create",
                 )
                 resp_mock = MagicMock()
                 resp_mock.status_code = 200
@@ -267,6 +327,13 @@ class TestSymphony:
                         resp_mock.status_code = 401
                         ...
                     # send message
+                elif url == "https://symphony.host/pod/v1/im/create":
+                    if inform_client:
+                        resp_mock.json.return_value = {}
+                        resp_mock.status_code = 401
+                    else:
+                        resp_mock.json.return_value = {"id": "an id"}
+                    # create im
                 sleep(0.1)
                 return resp_mock
 
@@ -282,6 +349,7 @@ class TestSymphony:
                 datafeed_read_url="https://symphony.host/agent/v5/datafeeds/{{datafeed_id}}/read",
                 room_search_url="https://symphony.host/pod/v3/room/search",
                 room_info_url="https://symphony.host/pod/v3/room/{{room_id}}/info",
+                im_create_url="https://symphony.host/pod/v1/im/create",
                 cert="BEGIN CERTIFICATE:my_cert_string",  # hack to bypass file opening
                 key="BEGIN PRIVATE KEY:my_key_string",  # hack to bypass file opening
                 error_room=None if not inform_client else "another sample room",
@@ -304,24 +372,26 @@ class TestSymphony:
 
             @csp.graph
             def graph():
-                # send a fake slack message to the app
+                # send a fake symphony message to the app
                 # stop = send_fake_message(clientmock, reqmock, am)
 
                 # send a response
-                resp = hello(csp.unroll(adapter.subscribe()))
+                resp = csp.unroll(hello(csp.unroll(adapter.subscribe())))
                 adapter.publish(resp)
 
                 csp.add_graph_output("response", resp)
 
                 # stop after first messages
-                done_flag = csp.count(resp) == 2
+                done_flag = csp.count(resp) == 3
                 done_flag = csp.filter(done_flag, done_flag)
                 csp.stop_engine(done_flag)
 
             # run the graph
-            resp = csp.run(graph, realtime=True)
+            resp = csp.run(graph, realtime=True, endtime=datetime.now(timezone.utc) + timedelta(seconds=5))  # timeout after 5 seconds
 
-            assert len(resp["response"]) == 2
+            assert isinstance(resp, dict)
+            assert "response" in resp
+            assert len(resp["response"]) == 3
             assert resp["response"][0][1] == SymphonyMessage(
                 room="another sample room",
                 msg="Hello <@sender-user-id>!",
@@ -407,6 +477,18 @@ class TestSymphony:
                 )
                 in requests_post_mock.call_args_list
             )
+            assert (
+                call(
+                    url="https://symphony.host/pod/v1/im/create",
+                    json=["sender-user-id"],
+                    headers={
+                        "sessionToken": "a-fake-token",
+                        "keyManagerToken": "a-fake-token",
+                        "Accept": "application/json",
+                    },
+                )
+                in requests_post_mock.call_args_list
+            )
             assert requests_delete_mock.call_count == 1
             assert requests_delete_mock.call_args_list == [
                 call(
@@ -418,6 +500,7 @@ class TestSymphony:
                     },
                 )
             ]
+            assert "Failed sending message to Symphony" in caplog.text
             if inform_client:
                 # Check if the expected message is in the logs
                 assert "Cannot send message to room:" in caplog.text
@@ -432,6 +515,19 @@ class TestSymphony:
                     call(
                         url="https://symphony.host/agent/v4/stream/{sid}/message/create",
                         json={"message": "\n        <messageML>\n        ERROR: Could not send messsage on Symphony\n        </messageML>\n        "},
+                        headers={
+                            "sessionToken": "a-fake-token",
+                            "keyManagerToken": "a-fake-token",
+                            "Accept": "application/json",
+                        },
+                    )
+                    in requests_post_mock.call_args_list
+                )
+            else:
+                assert (
+                    call(
+                        url="https://symphony.host/agent/v4/stream/{sid}/message/create",
+                        json={"message": "\n        <messageML>\n        Hello!\n        </messageML>\n        "},
                         headers={
                             "sessionToken": "a-fake-token",
                             "keyManagerToken": "a-fake-token",
