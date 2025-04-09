@@ -15,8 +15,7 @@ The Symphony adapter allows for reading and writing of messages from the [Sympho
 
 ## Chat Framework
 
-`csp-chat` is a framework for writing cross-platform, command oriented chat bots.
-It will be released in 2025 with initial support for `Slack`, `Symphony`, and `Discord`.
+[`csp-bot`](https://github.com/Point72/csp-bot) is a framework for writing cross-platform, command oriented chat bots.
 
 ## Installation
 
@@ -34,4 +33,4 @@ conda install csp csp-adapter-symphony -c conda-forge
 
 ## License
 
-This software is licensed under the Apache 2.0 license. See the [LICENSE](LICENSE) file for details.
+This software is licensed under the Apache 2.0 license. See the [LICENSE](https://github.com/Point72/csp-adapter-symphony/blob/main/LICENSE) file for details.
