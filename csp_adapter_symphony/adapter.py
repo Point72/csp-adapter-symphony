@@ -2,7 +2,7 @@ import json
 import logging
 import threading
 from queue import Queue
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import csp
 import requests
@@ -65,6 +65,22 @@ def send_symphony_message(msg: str, room_id: str, message_create_url: str, heade
         json=out_json,
         headers=header,
     )
+
+
+def create_im_stream(user_id: Union[str, List[str]], im_create_url: str, header: Dict[str, str]) -> Optional[str]:
+    response = requests.post(
+        url=im_create_url,
+        json=[user_id] if isinstance(user_id, str) else user_id,
+        headers=header,
+    )
+
+    if response.status_code != 200:
+        return None
+
+    try:
+        return response.json().get("id")
+    except requests.JSONDecodeError:
+        return None
 
 
 def _get_user_mentions(payload):
@@ -274,6 +290,7 @@ SymphonyReaderPushAdapter = py_push_adapter_def(
     rooms=set,
     exit_msg=str,
     room_mapper=object,
+    memoize=False,  # config is not hashable
 )
 
 
@@ -285,22 +302,28 @@ def _send_messages(
     """Read messages from msg_queue and write to symphony. msg_queue to contain instances of SymphonyMessage, or None to shut down"""
     send_message = config.get_retry_decorator()(send_symphony_message)
     message_create_url = config.message_create_url
+    create_im = config.get_retry_decorator()(create_im_stream)
+    im_create_url = config.im_create_url
     header = config.header
 
-    while True:
-        msg = msg_queue.get()
-        msg_queue.task_done()
-        if not msg:  # send None to kill
-            break
-
-        room_id = room_mapper.get_room_id(msg.room)
+    def _send_message(
+        msg: SymphonyMessage,
+    ):
+        if msg.room == "IM" and hasattr(msg, "user_id"):
+            stream_id = create_im(msg.user_id, im_create_url, header)
+            if stream_id:
+                room_mapper.set_im_id(msg.user_id, stream_id)
+            room_name = msg.user_id
+        else:
+            room_name = msg.room
+        room_id = room_mapper.get_room_id(room_name)
         error, msg_resp = None, None
         if not room_id:
-            error = f"Cannot find id for symphony room {msg.room} found in SymphonyMessage"
+            error = f"Cannot find id for symphony room {room_name} found in SymphonyMessage"
         else:
             msg_resp = send_message(msg.msg, room_id, message_create_url, header)
             if msg_resp.status_code != 200:
-                error = f"Cannot send message to room: '{msg.room}' - received symphony server response: status_code: {msg_resp.status_code} text: '{msg_resp.text}'"
+                error = f"Cannot send message to room: '{room_name}' - received symphony server response: status_code: {msg_resp.status_code} text: '{msg_resp.text}'"
                 # let client know that an error occured
                 if config.inform_client:
                     send_message(
@@ -331,11 +354,22 @@ def _send_messages(
                         f"Cannot send message to room {config.error_room} - received symphony server response: {error_msg_resp.status_code} {error_msg_resp.text}"
                     )
                     send_message(
-                        f"A message failed to be sent via symphony to room {msg.room}, and the error message couldn't be properly displayed.",
+                        f"A message failed to be sent via symphony to room {room_name}, and the error message couldn't be properly displayed.",
                         error_room_id,
                         message_create_url,
                         header,
                     )
+
+    while True:
+        msg = msg_queue.get()
+        msg_queue.task_done()
+        if not msg:  # send None to kill
+            break
+
+        try:
+            _send_message(msg)
+        except Exception:  # don't stop the thread on error
+            log.exception("Failed sending message to Symphony")
 
 
 class SymphonyAdapter:
