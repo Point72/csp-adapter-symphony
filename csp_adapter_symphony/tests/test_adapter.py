@@ -147,7 +147,7 @@ class TestSymphony:
         assert requests_mock.call_args_list == [
             call(
                 url="message/create/url",
-                json={"message": "\n        <messageML>\n        test_msg\n        </messageML>\n        "},
+                json={"message": "<messageML>test_msg</messageML>"},
                 headers={"Authorization": "Bearer Blerg"},
             )
         ]
@@ -468,7 +468,7 @@ class TestSymphony:
             assert (
                 call(
                     url="https://symphony.host/agent/v4/stream/{sid}/message/create",
-                    json={"message": "\n        <messageML>\n        Hello <@sender-user-id>!\n        </messageML>\n        "},
+                    json={"message": "<messageML>Hello <@sender-user-id>!</messageML>"},
                     headers={
                         "sessionToken": "a-fake-token",
                         "keyManagerToken": "a-fake-token",
@@ -514,7 +514,7 @@ class TestSymphony:
                 assert (
                     call(
                         url="https://symphony.host/agent/v4/stream/{sid}/message/create",
-                        json={"message": "\n        <messageML>\n        ERROR: Could not send messsage on Symphony\n        </messageML>\n        "},
+                        json={"message": "<messageML>ERROR: Could not send messsage on Symphony</messageML>"},
                         headers={
                             "sessionToken": "a-fake-token",
                             "keyManagerToken": "a-fake-token",
@@ -527,7 +527,7 @@ class TestSymphony:
                 assert (
                     call(
                         url="https://symphony.host/agent/v4/stream/{sid}/message/create",
-                        json={"message": "\n        <messageML>\n        Hello!\n        </messageML>\n        "},
+                        json={"message": "<messageML>Hello!</messageML>"},
                         headers={
                             "sessionToken": "a-fake-token",
                             "keyManagerToken": "a-fake-token",
