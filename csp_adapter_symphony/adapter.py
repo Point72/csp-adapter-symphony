@@ -52,13 +52,7 @@ class Presence(csp.Enum):
 
 def send_symphony_message(msg: str, room_id: str, message_create_url: str, header: Dict[str, str]):
     """Wrap message string and send it to symphony"""
-    out_json = {
-        "message": f"""
-        <messageML>
-        {msg}
-        </messageML>
-        """
-    }
+    out_json = {"message": f"<messageML>{msg}</messageML>"}
     url = message_create_url.format(sid=room_id)
     return requests.post(
         url=url,
