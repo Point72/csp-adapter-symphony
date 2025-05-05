@@ -19,29 +19,30 @@ __all__ = ("Presence", "SymphonyAdapter", "send_symphony_message")
 log = logging.getLogger(__file__)
 
 
-def _sync_create_data_feed(datafeed_create_url: str, header: Dict[str, str]) -> Tuple[requests.Response, str]:
+def _sync_create_data_feed(datafeed_create_url: str, header: Dict[str, str], datafeed_id: str = "") -> Tuple[requests.Response, str]:
     r = requests.post(
         url=datafeed_create_url,
         headers=header,
+        json={"tag": datafeed_id} if datafeed_id else None,
     )
     datafeed_id = r.json()["id"]
     log.info(f"created symphony datafeed with id={datafeed_id}")
     return r, datafeed_id
 
 
-def _get_or_create_datafeed(datafeed_create_url: str, header: Dict[str, str]) -> Tuple[requests.Response, str]:
+def _get_or_create_datafeed(datafeed_create_url: str, header: Dict[str, str], datafeed_id: str = "") -> Tuple[requests.Response, str]:
     """
-    It is considered best practice that bot's only create and read from one datafeed. If your bot goes down, it should re-authenticate, and try to read from the previously created datafeed.  If this fails then you should create a new datafeed, and begin reading from this new datafeed.
-
-    Creating and reading from multiple datafeeds concurrently can result in your bot processing duplicate messages and subsequently sending duplicate or out of order messages back to the user.
+    It is considered best practice that bot's only create and read from one datafeed. If your bot goes down, it should re-authenticate,
+    and try to read from the previously created datafeed. If this fails then you should create a new datafeed, and begin reading from this new datafeed.
     """
     r = requests.get(
         url=datafeed_create_url,
         headers=header,
+        params={"tag": datafeed_id} if datafeed_id else None,
     )
     existing_datafeeds = r.json()
     if not existing_datafeeds:
-        return _sync_create_data_feed(datafeed_create_url, header)
+        return _sync_create_data_feed(datafeed_create_url, header, datafeed_id)
     return r, existing_datafeeds[0]["id"]
 
 
@@ -188,7 +189,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         self._config = config
 
         # message and datafeed
-        self._datafeed_id: Optional[str] = None
+        self._datafeed_id = config.datafeed_id
 
         # rooms to enter by default
         self._rooms = rooms
@@ -199,17 +200,19 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         self._room_mapper = room_mapper
 
     def _delete_datafeed_if_set(self):
-        if self._datafeed_id is not None:
+        if self._datafeed_id:
             delete_url = self._config.datafeed_delete_url.format(datafeed_id=self._datafeed_id)
             resp = requests.delete(url=delete_url, headers=self._config.header)
             log.info(f"Deleted datafeed with url={delete_url}: resp={resp}")
-            self._datafeed_id = None
+            self._datafeed_id = self._config.datafeed_id  # set to default value
 
     def _set_new_datafeed(self):
         self._delete_datafeed_if_set()
-        resp, datafeed_id = _get_or_create_datafeed(self._config.datafeed_create_url, self._config.header)
-        if resp.status_code not in (200, 201, 204):
-            raise Exception(f"ERROR: bad status ({resp.status_code}) from _get_or_create_datafeed, cannot start Symphony reader")
+        resp, datafeed_id = _get_or_create_datafeed(self._config.datafeed_create_url, self._config.header, self._datafeed_id)
+        if resp.status_code == 403:
+            raise Exception("Reached maximum number of active datafeeds. Cannot create new datafeed.")
+        elif resp.status_code not in (200, 201, 204):
+            raise Exception(f"ERROR: bad status ({resp.status_code}) from _get_or_create_datafeed. Cannot create new datafeed.")
         else:
             self._url = self._config.datafeed_read_url.format(datafeed_id=datafeed_id)
             self._datafeed_id = datafeed_id
@@ -269,7 +272,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
                 # No need to retry these calls, we are failing anyways
                 error_msg = "An exception occured trying to interact with datafeed, max_attempts exceeded. Symphony Reader is shutting down..."
                 log.error(error_msg)
-                if self._error_room and (error_room_id := self._room_mapper.get_room_id(self._error_room)):
+                if self._config.error_room and (error_room_id := self._room_mapper.get_room_id(self._config.error_room)):
                     send_symphony_message(error_msg, error_room_id, self._config.message_create_url, self._config.header)
                 raise exc
             if ret:
