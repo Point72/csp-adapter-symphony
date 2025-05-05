@@ -281,7 +281,7 @@ class TestSymphony:
             named_temporary_file_mock.return_value.__enter__.return_value.name = "a_temp_file"
 
             # mock get request response based on url
-            def get_request(url, headers, json=None):
+            def get_request(url, headers, params=None):
                 assert url in ("https://symphony.host/pod/v3/room/{room_id}/info", "https://symphony.host/agent/v5/datafeeds")
                 resp_mock = MagicMock()
                 resp_mock.status_code = 200
@@ -406,6 +406,7 @@ class TestSymphony:
                         "keyManagerToken": "a-fake-token",
                         "Accept": "application/json",
                     },
+                    params=None,
                 ),
                 call(
                     "https://symphony.host/pod/v3/room/{room_id}/info",
@@ -438,6 +439,7 @@ class TestSymphony:
                             "keyManagerToken": "a-fake-token",
                             "Accept": "application/json",
                         },
+                        json=None,
                     )
                     in requests_post_mock.call_args_list
                 )
