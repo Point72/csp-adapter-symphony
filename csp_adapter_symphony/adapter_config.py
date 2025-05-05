@@ -55,6 +55,9 @@ class SymphonyAdapterConfig(BaseModel):
     initial_interval_ms: int = Field(500, description="Initial interval to wait between attempts, in milliseconds")
     multiplier: float = Field(2.0, description="Multiplier between attempt delays for exponential backoff")
     max_interval_ms: int = Field(300000, description="Maximum delay between retry attempts, in milliseconds")
+    datafeed_id: str = Field(
+        "", description="The ID of the datafeed to be used by the datafeed reader. If left empty, a datafeed ID will be automatically assigned"
+    )
 
     _default_endpoints = {
         "message_create_url": "/agent/v4/stream/{sid}/message/create",
