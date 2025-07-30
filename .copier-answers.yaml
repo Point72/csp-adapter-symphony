@@ -1,0 +1,12 @@
+# Changes here will be overwritten by Copier
+_commit: a03224b
+_src_path: https://github.com/python-project-templates/base.git
+add_docs: false
+add_extension: python
+add_wiki: true
+email: CSPOpenSource@point72.com
+github: Point72
+project_description: A csp adapter for symphony
+project_name: csp adapter symphony
+python_version_primary: '3.9'
+team: Point72, L.P.

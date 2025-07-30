@@ -5,3 +5,5 @@ Makefile linguist-documentation
 
 *.md text=auto eol=lf
 *.py text=auto eol=lf
+*.toml text=auto eol=lf
+*.yaml text=auto eol=lf
