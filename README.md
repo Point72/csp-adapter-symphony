@@ -2,9 +2,10 @@
 
 A [csp](https://github.com/point72/csp) adapter for [symphony](https://symphony.com)
 
-[![Build Status](https://github.com/point72/csp-adapter-symphony/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/point72/csp-adapter-symphony/actions?query=workflow%3A%22Build+Status%22)
+[![Build Status](https://github.com/Point72/csp-adapter-symphony/actions/workflows/build.yaml/badge.svg?branch=main&event=push)](https://github.com/Point72/csp-adapter-symphony/actions/workflows/build.yaml)
+[![codecov](https://codecov.io/gh/Point72/csp-adapter-symphony/branch/main/graph/badge.svg)](https://codecov.io/gh/Point72/csp-adapter-symphony)
 [![GitHub issues](https://img.shields.io/github/issues/point72/csp-adapter-symphony.svg)](https://github.com/point72/csp-adapter-symphony/issues)
-[![PyPI](https://img.shields.io/pypi/l/csp-adapter-symphony.svg)](https://pypi.python.org/pypi/csp-adapter-symphony)
+[![License](https://img.shields.io/github/license/Point72/csp-adapter-symphony)](https://github.com/Point72/csp-adapter-symphony)
 [![PyPI](https://img.shields.io/pypi/v/csp-adapter-symphony.svg)](https://pypi.python.org/pypi/csp-adapter-symphony)
 
 ## Features
