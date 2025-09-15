@@ -146,6 +146,7 @@ csp_adapter_symphony/extension
 # Jupyter
 .ipynb_checkpoints
 .autoversion
+Untitled*.ipynb
 !csp_adapter_symphony/extension/csp_adapter_symphony.json
 !csp_adapter_symphony/extension/install.json
 csp_adapter_symphony/nbextension
