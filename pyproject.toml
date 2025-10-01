@@ -50,7 +50,7 @@ develop = [
     "mdformat-tables>=1",
     "pytest",
     "pytest-cov",
-    "ruff>=0.6,<0.13",
+    "ruff>=0.6,<0.14",
     "twine",
     "uv",
     "wheel",
