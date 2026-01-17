@@ -157,3 +157,11 @@ csp_adapter_symphony/labextension
 
 # Rust
 target
+
+# Auth
+.env.sh
+combined.pem
+
+# Reference
+symphony-api-spec
+symphony-bdk-python
