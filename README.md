@@ -1,229 +1,281 @@
-# csp symphony adapter
+# csp-adapter-symphony
 
-A [csp](https://github.com/point72/csp) adapter for [Symphony](https://symphony.com) using the official [Symphony BDK for Python](https://github.com/finos/symphony-bdk-python).
+A [CSP](https://github.com/point72/csp) adapter for [Symphony](https://symphony.com) that wraps [chatom's](https://github.com/1kbgz/chatom) SymphonyBackend.
+
+This adapter provides real-time message streaming and processing for Symphony using CSP's reactive programming model, powered by chatom for all Symphony operations.
 
 [![Build Status](https://github.com/Point72/csp-adapter-symphony/actions/workflows/build.yaml/badge.svg?branch=main&event=push)](https://github.com/Point72/csp-adapter-symphony/actions/workflows/build.yaml)
 [![codecov](https://codecov.io/gh/Point72/csp-adapter-symphony/branch/main/graph/badge.svg)](https://codecov.io/gh/Point72/csp-adapter-symphony)
-[![GitHub issues](https://img.shields.io/github/issues/point72/csp-adapter-symphony.svg)](https://github.com/point72/csp-adapter-symphony/issues)
 [![License](https://img.shields.io/github/license/Point72/csp-adapter-symphony)](https://github.com/Point72/csp-adapter-symphony)
 [![PyPI](https://img.shields.io/pypi/v/csp-adapter-symphony.svg)](https://pypi.python.org/pypi/csp-adapter-symphony)
 
 ## Features
 
-The Symphony adapter allows for reading and writing of messages from the [Symphony](https://symphony.com/) message platform using the official [Symphony BDK (Bot Development Kit)](https://github.com/finos/symphony-bdk-python).
+- **Chatom-Powered**: Uses chatom's SymphonyBackend for all Symphony operations
+- **Real-Time Streaming**: Subscribe to messages via Symphony's datafeed
+- **Message Publishing**: Send messages to rooms and direct messages
+- **Presence Management**: Set bot presence status
+- **Mention Utilities**: Easy @mention formatting with chatom's mention functions
+- **Type Safety**: Full type annotations with Pydantic models
 
-Key features:
+## Architecture
 
-- **BDK Integration**: Uses the official Symphony BDK for robust and maintainable Symphony integration
-- **Direct Messages**: Full support for sending and receiving direct messages (IMs)
-- **User Mentions**: Easy-to-use mention utilities for @mentioning users
-- **Form Handling**: Support for Symphony Elements (interactive forms)
-- **Presence Management**: Set and monitor bot presence status
-
-[More information is available in our wiki](https://github.com/Point72/csp-adapter-symphony/wiki)
+```mermaid
+graph TB
+    subgraph "Your CSP Graph"
+        A[SymphonyAdapter]
+        subgraph "chatom CSP Layer"
+            B["BackendAdapter<br/>message_reader / message_writer"]
+        end
+        subgraph "chatom SymphonyBackend"
+            C["connect, send_message, stream_messages"]
+        end
+        subgraph "Symphony BDK Python"
+            D["Symphony API Client"]
+        end
+        A --> B --> C --> D
+    end
+```
 
 ## Quick Start
 
-### Configuration
-
-Create a BDK configuration file (`~/.symphony/config.yaml`):
-
-```yaml
-host: company.symphony.com
-
-bot:
-    username: my-bot
-    privateKey:
-        path: /path/to/bot-private-key.pem
-```
-
-### Basic Example
-
-```python
-from datetime import timedelta
-
-import csp
-from csp import ts
-
-from csp_adapter_symphony import (
-    SymphonyAdapter,
-    SymphonyAdapterConfig,
-    SymphonyMessage,
-    mention_user,
-)
-
-# Load configuration from ~/.symphony/config.yaml
-config = SymphonyAdapterConfig.from_symphony_dir("config.yaml")
-
-
-@csp.node
-def reply_to_hello(msg: ts[SymphonyMessage]) -> ts[SymphonyMessage]:
-    """Reply to messages containing 'hello'."""
-    if "hello" in msg.msg.lower():
-        # Reply in the same room, mentioning the user
-        return msg.reply(f"Hello {msg.mention()}!", mention_author=False)
-
-
-@csp.node
-def handle_dm(msg: ts[SymphonyMessage]) -> ts[SymphonyMessage]:
-    """Handle direct messages."""
-    if msg.is_direct_message():
-        return msg.reply("Thanks for the DM!")
-
-
-def graph():
-    adapter = SymphonyAdapter(config)
-
-    # Subscribe to messages (unroll to get individual messages)
-    msgs = csp.unroll(adapter.subscribe())
-
-    # Process and respond
-    responses = reply_to_hello(msgs)
-    dm_responses = handle_dm(msgs)
-
-    # Publish responses
-    adapter.publish(responses)
-    adapter.publish(dm_responses)
-
-
-if __name__ == "__main__":
-    csp.run(graph, realtime=True, endtime=timedelta(hours=8))
-```
-
-### Sending Direct Messages
-
-```python
-# Send a DM to a specific user
-dm = SymphonyMessage.to_user(user_id="12345", msg="Hello via DM!")
-adapter.publish(dm)
-
-# Or reply to a message with a DM
-dm = incoming_msg.direct_reply("This is a private response")
-adapter.publish(dm)
-```
-
-### Working with Mentions
-
-```python
-from csp_adapter_symphony import mention_user, mention_users, mention_by_id
-
-# Mention by user ID
-text = f"Hello {mention_by_id('12345')}!"
-
-# Mention by email
-text = f"Hello {mention_user('user@example.com')}!"
-
-# Mention multiple users
-text = f"Hello {mention_users(['12345', '67890'])}!"
-
-# Check if a message mentions a specific user
-if incoming_msg.mentions_user("12345"):
-    # Handle mention...
-```
-
-## Chat Framework
-
-[`csp-bot`](https://github.com/Point72/csp-bot) is a framework for writing cross-platform, command oriented chat bots.
-
-## Installation
-
-Install with `pip`:
+### Installation
 
 ```bash
 pip install csp csp-adapter-symphony
 ```
 
-Install with `conda`:
-
-```bash
-conda install csp csp-adapter-symphony -c conda-forge
-```
-
-## Configuration Options
-
-The adapter can be configured in several ways:
-
-### From BDK Config File (Recommended)
+### Basic Example
 
 ```python
-# From ~/.symphony directory
-config = SymphonyAdapterConfig.from_symphony_dir("config.yaml")
+from datetime import datetime, timedelta
 
-# From any path
-config = SymphonyAdapterConfig.from_file("/path/to/config.yaml")
+import csp
+from csp import ts
+
+from chatom.symphony import SymphonyConfig
+from csp_adapter_symphony import SymphonyAdapter, SymphonyMessage
+
+
+# Configure using chatom's SymphonyConfig
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/private-key.pem",
+)
+
+
+@csp.node
+def echo_messages(messages: ts[[SymphonyMessage]]) -> ts[SymphonyMessage]:
+    """Echo incoming messages back."""
+    if csp.ticked(messages):
+        for msg in messages:
+            if "hello" in msg.content.lower():
+                return SymphonyMessage(
+                    channel_id=msg.channel_id,  # Use generic field
+                    content=f"Hello, {msg.author_id}!",
+                )
+
+
+@csp.graph
+def my_bot():
+    adapter = SymphonyAdapter(config)
+
+    # Subscribe to all messages
+    messages = adapter.subscribe()
+
+    # Process messages
+    responses = echo_messages(messages)
+
+    # Publish responses
+    adapter.publish(responses)
+
+
+if __name__ == "__main__":
+    csp.run(my_bot, starttime=datetime.now(), endtime=timedelta(hours=8), realtime=True)
 ```
 
-### From Individual Parameters
+### Filtering by Room
 
 ```python
+@csp.graph
+def my_bot():
+    adapter = SymphonyAdapter(config)
+
+    # Subscribe to specific rooms by name or ID
+    messages = adapter.subscribe(rooms={"Bot Room", "Support"})
+    messages = adapter.subscribe(rooms={"stream123", "stream456"})
+
+    # Process...
+```
+
+### Presence Management
+
+```python
+from csp_adapter_symphony import SymphonyPresenceStatus
+
+@csp.graph
+def my_bot():
+    adapter = SymphonyAdapter(config)
+
+    # Set presence to available
+    presence = csp.const(SymphonyPresenceStatus.AVAILABLE)
+    adapter.publish_presence(presence)
+```
+
+### Using Mentions
+
+```python
+from csp_adapter_symphony import mention_user_by_uid, mention_user_by_email, format_hashtag
+
+# Mention by user ID
+msg_content = f"Hello {mention_user_by_uid(12345)}!"
+
+# Mention by email
+msg_content = f"Hello {mention_user_by_email('user@example.com')}!"
+
+# Check if message mentions a user
+if incoming_msg.mentions_user("12345"):
+    # Handle mention...
+
+# Use hashtags
+msg_content = f"Check out {format_hashtag('important')}!"
+```
+
+## Configuration
+
+### Using SymphonyConfig (Recommended)
+
+Use chatom's `SymphonyConfig` directly:
+
+```python
+from chatom.symphony import SymphonyConfig
+
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/private-key.pem",
+)
+adapter = SymphonyAdapter(config)
+```
+
+### Using SymphonyAdapterConfig
+
+For adapter-specific options (error handling, retries):
+
+```python
+from csp_adapter_symphony import SymphonyAdapterConfig
+
 config = SymphonyAdapterConfig(
     host="company.symphony.com",
     bot_username="my-bot",
-    private_key_path="/path/to/private-key.pem",
-    error_room="Error Notifications",  # Optional: room for error messages
-    inform_client=True,  # Optional: notify users of send failures
+    bot_private_key_path="/path/to/private-key.pem",
+    # Adapter-specific options:
+    error_room="Error Notifications",
+    inform_client=True,
+    max_attempts=5,
 )
 ```
 
 ### Certificate-Based Authentication
 
-For environments using certificate authentication:
-
 ```python
-config = SymphonyAdapterConfig(
+config = SymphonyConfig(
     host="company.symphony.com",
     bot_username="my-bot@domain.com",
-    certificate_path="/path/to/combined.pem",  # Combined cert+key file
+    bot_certificate_path="/path/to/combined.pem",
 )
 ```
 
-### Custom Host Configuration
+## API Reference
 
-For deployments with separate API endpoints:
+### SymphonyAdapter
+
+The main adapter class that wraps chatom's SymphonyBackend.
 
 ```python
-config = SymphonyAdapterConfig(
-    host="company.symphony.com",
-    pod_host="pod.company.symphony.com",       # Pod API
-    agent_host="agent.company.symphony.com",   # Agent API
-    session_auth_host="auth.company.symphony.com",  # Session Auth
-    key_manager_host="km.company.symphony.com",     # Key Manager
-    bot_username="my-bot",
-    certificate_path="/path/to/combined.pem",
-)
+class SymphonyAdapter:
+    def __init__(self, config: SymphonyConfig): ...
+
+    def subscribe(
+        self,
+        room_names: Optional[Set[str]] = None,
+        room_ids: Optional[Set[str]] = None,
+        skip_own: bool = True,
+        skip_history: bool = True,
+    ) -> ts[[SymphonyMessage]]: ...
+
+    def publish(self, msg: ts[SymphonyMessage]): ...
+
+    def publish_presence(self, presence: ts[SymphonyPresenceStatus], timeout: float = 5.0): ...
 ```
 
-### SSL Configuration
+### SymphonyMessage (from chatom)
+
+Pydantic model for Symphony messages:
 
 ```python
-# Custom CA certificate
-config = SymphonyAdapterConfig(
-    host="company.symphony.com",
-    bot_username="my-bot",
-    private_key_path="/path/to/private-key.pem",
-    ssl_trust_store_path="/path/to/ca-bundle.pem",
-)
+class SymphonyMessage(Message):
+    channel_id: str = ""  # Generic field (inherited) - USE THIS
+    stream_id: str = ""   # Symphony-specific alias
+    content: str = ""
+    author_id: str = ""
+    mentions: List[int] = []
+    message_ml: str = ""
+    # ... and more
 
-# Disable SSL verification (development only!)
-config = SymphonyAdapterConfig(
-    host="company.symphony.com",
-    bot_username="my-bot",
-    private_key_path="/path/to/private-key.pem",
-    ssl_verify=False,
-)
+    def mentions_user(self, user_id: str) -> bool: ...
+
+    @staticmethod
+    def extract_mentions_from_data(data: str) -> List[int]: ...
 ```
 
-See the [Setup Guide](https://github.com/Point72/csp-adapter-symphony/wiki/Setup) for detailed configuration options.
+**Note:** Use `channel_id` (the generic field) for backend-agnostic code.
 
-## Migration from v0.3.x
+### SymphonyPresenceStatus (from chatom)
 
-Version 0.4.0 introduces the Symphony BDK integration. Key changes:
+Enum for presence status:
 
-1. **Dependencies**: `requests` and `tenacity` are replaced by `symphony-bdk-python`
-1. **Configuration**: Optionally use `SymphonyAdapterConfig.from_file()` or `from_symphony_dir()` instead of manual URL configuration
-1. **Direct Messages**: Now work correctly using `room="IM"` with `user_id`
-1. **Message Methods**: New helper methods like `.reply()`, `.direct_reply()`, `.mention()`
+```python
+class SymphonyPresenceStatus(Enum):
+    AVAILABLE = "available"
+    BUSY = "busy"
+    AWAY = "away"
+    ON_THE_PHONE = "on_the_phone"
+    BE_RIGHT_BACK = "be_right_back"
+    IN_A_MEETING = "in_a_meeting"
+    OUT_OF_OFFICE = "out_of_office"
+    OFF_WORK = "off_work"
+```
+
+## Using chatom CSP Layer Directly
+
+You can also use chatom's generic CSP layer with any backend:
+
+```python
+from chatom.csp import BackendAdapter, message_reader, message_writer
+from chatom.symphony import SymphonyBackend, SymphonyConfig
+
+# Create backend
+config = SymphonyConfig(host="company.symphony.com", ...)
+backend = SymphonyBackend(config=config)
+
+# Use generic adapter
+adapter = BackendAdapter(backend)
+
+@csp.graph
+def my_graph():
+    messages = adapter.subscribe()
+    # ... process ...
+    adapter.publish(responses)
+```
+
+## Related Projects
+
+- [chatom](https://github.com/Point72/chatom) - Unified chat platform abstraction
+- [csp](https://github.com/Point72/csp) - Reactive programming library
+- [csp-bot](https://github.com/Point72/csp-bot) - Cross-platform chat bot framework
 
 ## License
 
-This software is licensed under the Apache 2.0 license. See the [LICENSE](https://github.com/Point72/csp-adapter-symphony/blob/main/LICENSE) file for details.
+Apache 2.0

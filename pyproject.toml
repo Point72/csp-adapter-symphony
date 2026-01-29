@@ -34,6 +34,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "chatom>=0.1.0,<0.2.0",
     "csp",
     "pydantic>=2",
     "symphony-bdk-python>=2.0.0",

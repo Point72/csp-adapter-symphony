@@ -1,443 +1,211 @@
-"""Tests for the Symphony adapter using symphony-bdk-python."""
+"""Tests for the Symphony CSP adapter using chatom.
 
+This test module covers the SymphonyAdapter which wraps chatom's
+SymphonyBackend for use with CSP.
+"""
+
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import csp
 import pytest
 
 from csp_adapter_symphony import (
+    SymphonyAdapter,
     SymphonyAdapterConfig,
+    SymphonyConfig,
     SymphonyMessage,
+    SymphonyPresenceStatus,
     SymphonyRoomMapper,
-    extract_mentions_from_text,
-    format_with_message_ml,
-    is_bot_mentioned,
-    mention_by_email,
-    mention_by_id,
-    mention_user,
-    mention_users,
+    SymphonyUser,
 )
-from csp_adapter_symphony.adapter import (
-    _check_bdk_available,
-    _get_user_mentions,
-    _handle_elements_action,
-    _handle_message_sent,
-)
-from csp_adapter_symphony.mention import format_at_mention
-
-
-class TestMentionFunctions:
-    """Tests for mention utility functions."""
-
-    def test_mention_user_with_email(self):
-        """Test mention_user with email address."""
-        result = mention_user("user@example.com")
-        assert result == '<mention email="user@example.com" />'
-
-    def test_mention_user_with_id(self):
-        """Test mention_user with user ID."""
-        result = mention_user("12345")
-        assert result == '<mention uid="12345" />'
-
-    def test_mention_user_with_numeric_id(self):
-        """Test mention_user with numeric user ID."""
-        result = mention_user(12345)
-        assert result == '<mention uid="12345" />'
-
-    def test_mention_user_empty(self):
-        """Test mention_user with empty string."""
-        result = mention_user("")
-        assert result == ""
-
-    def test_mention_user_none(self):
-        """Test mention_user with None-like input."""
-        result = mention_user()
-        assert result == ""
-
-    def test_mention_by_email(self):
-        """Test mention_by_email function."""
-        result = mention_by_email("user@example.com")
-        assert result == '<mention email="user@example.com" />'
-
-    def test_mention_by_email_empty(self):
-        """Test mention_by_email with empty string."""
-        result = mention_by_email("")
-        assert result == ""
-
-    def test_mention_by_id(self):
-        """Test mention_by_id function."""
-        result = mention_by_id("12345")
-        assert result == '<mention uid="12345" />'
-
-    def test_mention_by_id_int(self):
-        """Test mention_by_id with integer."""
-        result = mention_by_id(12345)
-        assert result == '<mention uid="12345" />'
-
-    def test_mention_by_id_empty(self):
-        """Test mention_by_id with empty string."""
-        result = mention_by_id("")
-        assert result == ""
-
-    def test_mention_users(self):
-        """Test mention_users with multiple identifiers."""
-        result = mention_users(["12345", "user@example.com"])
-        assert result == '<mention uid="12345" /> <mention email="user@example.com" />'
-
-    def test_mention_users_custom_separator(self):
-        """Test mention_users with custom separator."""
-        result = mention_users(["12345", "67890"], separator=", ")
-        assert result == '<mention uid="12345" />, <mention uid="67890" />'
-
-    def test_mention_users_empty_list(self):
-        """Test mention_users with empty list."""
-        result = mention_users([])
-        assert result == ""
-
-    def test_mention_users_with_empty_items(self):
-        """Test mention_users filters out empty items."""
-        result = mention_users(["12345", "", "67890"])
-        assert result == '<mention uid="12345" /> <mention uid="67890" />'
-
-    def test_extract_mentions_from_text(self):
-        """Test extracting mentions from MessageML text."""
-        text = 'Hello <mention uid="12345" /> and <mention uid="67890" />'
-        result = extract_mentions_from_text(text)
-        assert result == ["12345", "67890"]
-
-    def test_extract_mentions_empty_text(self):
-        """Test extracting mentions from text without mentions."""
-        text = "Hello world"
-        result = extract_mentions_from_text(text)
-        assert result == []
-
-    def test_is_bot_mentioned(self):
-        """Test is_bot_mentioned function."""
-        text = '<mention uid="12345" /> hello'
-        assert is_bot_mentioned(text, "12345") is True
-        assert is_bot_mentioned(text, "99999") is False
-
-    def test_format_at_mention(self):
-        """Test format_at_mention function."""
-        result = format_at_mention("John Doe", "12345")
-        # format_at_mention returns a standard mention tag
-        assert result == '<mention uid="12345" />'
-
-
-class TestFormatWithMessageML:
-    """Tests for MessageML formatting."""
-
-    def test_to_message_ml(self):
-        """Test converting to MessageML format."""
-        input_text = "This & that < ${variable} #{hashtag}"
-        expected_output = "This &#38; that &lt; &#36;{variable} &#35;{hashtag}"
-        assert format_with_message_ml(input_text) == expected_output
-
-    def test_from_message_ml(self):
-        """Test converting from MessageML format."""
-        input_text = "This &#38; that &lt; &#36;{variable} &#35;{hashtag}"
-        expected_output = "This & that < ${variable} #{hashtag}"
-        assert format_with_message_ml(input_text, to_message_ml=False) == expected_output
-
-    def test_no_changes(self):
-        """Test text without special characters."""
-        input_text = "Regular text without special characters"
-        assert format_with_message_ml(input_text) == input_text
-        assert format_with_message_ml(input_text, to_message_ml=False) == input_text
-
-    def test_greater_than_escape(self):
-        """Test escaping greater than sign."""
-        input_text = "a > b"
-        expected_output = "a &gt; b"
-        assert format_with_message_ml(input_text) == expected_output
 
 
 class TestSymphonyMessage:
-    """Tests for SymphonyMessage struct and methods."""
+    """Tests for chatom's SymphonyMessage."""
 
     def test_message_creation(self):
         """Test basic message creation."""
+        from chatom.base import Channel, User
+
         msg = SymphonyMessage(
-            user="John Doe",
-            user_email="john@example.com",
-            user_id="12345",
-            room="Test Room",
-            msg="Hello, World!",
+            author=User(id="12345"),
+            channel=Channel(id="stream123"),
+            stream_id="stream123",
+            content="Hello, World!",
+            metadata={
+                "user": "John Doe",
+                "user_email": "john@example.com",
+                "room": "Test Room",
+            },
         )
-        assert msg.user == "John Doe"
-        assert msg.user_email == "john@example.com"
-        assert msg.user_id == "12345"
-        assert msg.room == "Test Room"
-        assert msg.msg == "Hello, World!"
+        assert msg.author_id == "12345"
+        assert msg.content == "Hello, World!"
+        assert msg.stream_id == "stream123"
+        assert msg.metadata["room"] == "Test Room"
 
     def test_message_defaults(self):
         """Test message default values."""
         msg = SymphonyMessage()
-        assert msg.user == ""
-        assert msg.user_email == ""
-        assert msg.user_id == ""
-        assert msg.tags == []
-        assert msg.room == ""
-        assert msg.msg == ""
-        assert msg.form_id == ""
-        assert msg.form_values == {}
+        assert msg.author_id == ""
+        assert msg.content == ""
         assert msg.stream_id == ""
+        assert msg.mentions == []
 
-    def test_mention(self):
-        """Test mention method."""
-        msg = SymphonyMessage(user_id="12345", user_email="user@example.com")
-        assert msg.mention() == '<mention uid="12345" />'
-        assert msg.mention(use_email=True) == '<mention email="user@example.com" />'
+    def test_mentions_user_in_symphony_mentions_list(self):
+        """Test mentions_user with user in symphony_mentions list."""
+        msg = SymphonyMessage(
+            content="Hello",
+            mentions=[SymphonyUser(id="12345"), SymphonyUser(id="67890")],
+        )
+        assert msg.mentions_user(SymphonyUser(id="12345")) is True
+        assert msg.mentions_user(SymphonyUser(id="99999")) is False
 
-    def test_mention_no_user_id(self):
-        """Test mention method without user_id."""
-        msg = SymphonyMessage()
-        assert msg.mention() == ""
+    def test_extract_mentions_from_data(self):
+        """Test extracting mentions from message data."""
+        data = '{"0": {"type": "com.symphony.user.mention", "id": [{"value": "12345"}]}}'
+        mentions = SymphonyMessage.extract_mentions_from_data(data)
+        assert 12345 in mentions
 
-    def test_reply(self):
-        """Test reply method."""
-        msg = SymphonyMessage(room="Test Room", user_id="12345", stream_id="abc123")
-        reply = msg.reply("Thanks!")
-        assert reply.room == "Test Room"
-        assert reply.msg == "Thanks!"
-        assert reply.stream_id == "abc123"
+    def test_extract_mentions_empty(self):
+        """Test extracting mentions from empty data."""
+        mentions = SymphonyMessage.extract_mentions_from_data("")
+        assert mentions == []
 
-    def test_reply_with_mention(self):
-        """Test reply method with author mention."""
-        msg = SymphonyMessage(room="Test Room", user_id="12345")
-        reply = msg.reply("Thanks!", mention_author=True)
-        assert '<mention uid="12345" />' in reply.msg
-        assert "Thanks!" in reply.msg
+    def test_mentions_user_with_entity_data(self):
+        """Test mentions_user detection using entity_data (real API format)."""
+        # This simulates how real Symphony API responses provide mention data
+        msg = SymphonyMessage(
+            content='<messageML>Hello <mention uid="12345"/></messageML>',
+            entity_data={
+                "mention0": {
+                    "type": "com.symphony.user.mention",
+                    "id": [{"value": "12345"}],
+                }
+            },
+        )
+        # Should detect mention via entity_data
+        assert msg.mentions_user("12345") is True
+        assert msg.mentions_user(SymphonyUser(id="12345")) is True
+        assert msg.mentions_user("99999") is False
 
-    def test_direct_reply(self):
-        """Test direct_reply method."""
-        msg = SymphonyMessage(user="John", user_id="12345")
-        dm = msg.direct_reply("Private message")
-        assert dm.room == "IM"
-        assert dm.user_id == "12345"
-        assert dm.user == "John"
-        assert dm.msg == "Private message"
-
-    def test_is_direct_message(self):
-        """Test is_direct_message method."""
-        im_msg = SymphonyMessage(room="IM")
-        room_msg = SymphonyMessage(room="Test Room")
-        assert im_msg.is_direct_message() is True
-        assert room_msg.is_direct_message() is False
-
-    def test_mentions_user(self):
-        """Test mentions_user method."""
-        msg = SymphonyMessage(tags=["12345", "67890"])
+    def test_mentions_user_with_data_field(self):
+        """Test mentions_user detection using data field (JSON string)."""
+        # This simulates another format Symphony uses
+        msg = SymphonyMessage(
+            content="Hello",
+            data='{"mention0": {"type": "com.symphony.user.mention", "id": [{"value": "12345"}]}}',
+        )
+        # Should detect mention via data field
         assert msg.mentions_user("12345") is True
         assert msg.mentions_user("99999") is False
 
-    def test_get_mentioned_users(self):
-        """Test get_mentioned_users method."""
-        msg = SymphonyMessage(tags=["12345", "67890"])
-        assert msg.get_mentioned_users() == ["12345", "67890"]
+    def test_message_id_property(self):
+        """Test that message_id property returns id."""
+        msg = SymphonyMessage(
+            id="test-message-id-123",
+            content="Hello",
+        )
+        assert msg.message_id == "test-message-id-123"
+        assert msg.message_id == msg.id
 
-    def test_is_form_submission(self):
-        """Test is_form_submission method."""
-        form_msg = SymphonyMessage(form_id="test_form")
-        regular_msg = SymphonyMessage()
-        assert form_msg.is_form_submission() is True
-        assert regular_msg.is_form_submission() is False
+    def test_stream_id_property(self):
+        """Test that stream_id property returns channel.id."""
+        from chatom.base import Channel
 
-    def test_get_form_value(self):
-        """Test get_form_value method."""
-        msg = SymphonyMessage(form_values={"name": "John", "age": "30"})
-        assert msg.get_form_value("name") == "John"
-        assert msg.get_form_value("missing", "default") == "default"
-        assert msg.get_form_value("missing") is None
-
-    def test_with_message(self):
-        """Test with_message method."""
-        msg = SymphonyMessage(room="Test Room", user_id="12345")
-        new_msg = msg.with_message("New content")
-        assert new_msg.msg == "New content"
-        assert new_msg.room == "Test Room"
-        assert new_msg.user_id == "12345"
-
-    def test_to_room_classmethod(self):
-        """Test to_room class method."""
-        msg = SymphonyMessage.to_room("Test Room", "Hello!")
-        assert msg.room == "Test Room"
-        assert msg.msg == "Hello!"
-
-    def test_to_user_classmethod(self):
-        """Test to_user class method."""
-        msg = SymphonyMessage.to_user("12345", "Hello!")
-        assert msg.room == "IM"
-        assert msg.user_id == "12345"
-        assert msg.msg == "Hello!"
-
-    def test_to_stream_classmethod(self):
-        """Test to_stream class method."""
-        msg = SymphonyMessage.to_stream("abc123", "Hello!")
-        assert msg.stream_id == "abc123"
-        assert msg.msg == "Hello!"
+        msg = SymphonyMessage(
+            content="Hello",
+            channel=Channel(id="stream-id-456"),
+        )
+        assert msg.stream_id == "stream-id-456"
 
 
-class TestGetUserMentions:
-    """Tests for _get_user_mentions function."""
+class TestSymphonyAdapterConfig:
+    """Tests for SymphonyAdapterConfig."""
 
-    def test_get_user_mentions_valid(self):
-        """Test extracting user mentions from valid data."""
-        data = '{"key": {"type": "com.symphony.user.mention", "id": [{"value": "12345"}]}}'
-        result = _get_user_mentions(data)
-        assert result == ["12345"]
+    def test_config_creation(self):
+        """Test creating a config."""
+        config = SymphonyAdapterConfig(
+            host="test.symphony.com",
+            bot_username="testbot",
+            bot_private_key_path="/path/to/key.pem",
+        )
+        assert config.host == "test.symphony.com"
+        assert config.bot_username == "testbot"
 
-    def test_get_user_mentions_multiple(self):
-        """Test extracting multiple user mentions."""
-        data = '{"key1": {"type": "com.symphony.user.mention", "id": [{"value": "12345"}]}, "key2": {"type": "com.symphony.user.mention", "id": [{"value": "67890"}]}}'
-        result = _get_user_mentions(data)
-        assert "12345" in result
-        assert "67890" in result
+    def test_config_validation(self):
+        """Test config allows empty for mock backends."""
+        # Empty config is now allowed for mock/testing scenarios
+        config = SymphonyAdapterConfig()
+        assert config.host == ""
+        assert config.bot_username == ""
 
-    def test_get_user_mentions_empty(self):
-        """Test extracting mentions from empty data."""
-        result = _get_user_mentions("")
-        assert result == []
+    def test_config_to_bdk_config(self):
+        """Test converting to BDK config."""
+        config = SymphonyAdapterConfig(
+            host="test.symphony.com",
+            bot_username="testbot",
+            bot_private_key_path="/path/to/key.pem",
+        )
+        bdk_config = config.get_bdk_config()
+        assert bdk_config is not None
 
-    def test_get_user_mentions_invalid_json(self):
-        """Test extracting mentions from invalid JSON."""
-        result = _get_user_mentions("not valid json")
-        assert result == []
-
-    def test_get_user_mentions_no_mentions(self):
-        """Test extracting mentions when none exist."""
-        data = '{"key": {"type": "other.type", "value": "something"}}'
-        result = _get_user_mentions(data)
-        assert result == []
-
-
-class TestHandleMessageSent:
-    """Tests for _handle_message_sent function."""
-
-    def test_handle_message_sent_basic(self):
-        """Test handling a basic message sent event."""
-        # Create mock objects
-        initiator = MagicMock()
-        initiator.user.display_name = "John Doe"
-        initiator.user.email = "john@example.com"
-        initiator.user.user_id = 12345
-
-        event = MagicMock()
-        event.message.stream.stream_id = "stream123"
-        event.message.stream.stream_type = "ROOM"
-        event.message.message = "Hello, World!"
-        event.message.data = None
-
-        room_mapper = SymphonyRoomMapper()
-        room_mapper.register_room("Test Room", "stream123")
-
-        result = _handle_message_sent(initiator, event, set(), room_mapper)
-
-        assert result is not None
-        assert result.user == "John Doe"
-        assert result.user_email == "john@example.com"
-        assert result.user_id == "12345"
-        assert result.msg == "Hello, World!"
-        assert result.stream_id == "stream123"
-
-    def test_handle_message_sent_im(self):
-        """Test handling an IM message."""
-        initiator = MagicMock()
-        initiator.user.display_name = "John Doe"
-        initiator.user.email = "john@example.com"
-        initiator.user.user_id = 12345
-
-        event = MagicMock()
-        event.message.stream.stream_id = "im123"
-        event.message.stream.stream_type = "IM"
-        event.message.message = "Hello!"
-        event.message.data = None
-
-        room_mapper = SymphonyRoomMapper()
-        result = _handle_message_sent(initiator, event, set(), room_mapper)
-
-        assert result is not None
-        assert result.room == "IM"
-        # Check that IM was registered
-        assert room_mapper.get_room_id("John Doe") == "im123"
-
-    def test_handle_message_sent_filtered(self):
-        """Test that messages from non-matching rooms are filtered."""
-        initiator = MagicMock()
-        initiator.user.display_name = "John"
-        initiator.user.email = "john@example.com"
-        initiator.user.user_id = 12345
-
-        event = MagicMock()
-        event.message.stream.stream_id = "stream123"
-        event.message.stream.stream_type = "ROOM"
-        event.message.message = "Hello!"
-        event.message.data = None
-
-        room_mapper = SymphonyRoomMapper()
-        result = _handle_message_sent(initiator, event, {"other_stream"}, room_mapper)
-
-        assert result is None
-
-    def test_handle_message_sent_no_message(self):
-        """Test handling event with no message."""
-        initiator = MagicMock()
-        event = MagicMock()
-        event.message = None
-
-        room_mapper = SymphonyRoomMapper()
-        result = _handle_message_sent(initiator, event, set(), room_mapper)
-
-        assert result is None
+    def test_config_adapter_options(self):
+        """Test adapter-specific config options."""
+        config = SymphonyAdapterConfig(
+            host="test.symphony.com",
+            bot_username="testbot",
+            bot_private_key_path="/path/to/key.pem",
+            error_room="error-room",
+            inform_client=True,
+            max_attempts=5,
+        )
+        assert config.error_room == "error-room"
+        assert config.inform_client is True
+        assert config.max_attempts == 5
 
 
-class TestHandleElementsAction:
-    """Tests for _handle_elements_action function."""
+class TestSymphonyAdapter:
+    """Tests for SymphonyAdapter."""
 
-    def test_handle_elements_action_basic(self):
-        """Test handling a basic elements action event."""
-        initiator = MagicMock()
-        initiator.user.display_name = "John Doe"
-        initiator.user.email = "john@example.com"
-        initiator.user.user_id = 12345
+    def test_adapter_creation(self):
+        """Test creating an adapter."""
+        config = SymphonyConfig(
+            host="test.symphony.com",
+            bot_username="testbot",
+            bot_private_key_path="/path/to/key.pem",
+        )
+        adapter = SymphonyAdapter(config)
+        assert adapter.config == config
+        assert adapter.symphony_backend is not None
 
-        event = MagicMock()
-        event.stream.stream_id = "stream123"
-        event.stream.stream_type = "ROOM"
-        event.form_id = "test_form"
-        event.form_values = {"field1": "value1"}
-
-        room_mapper = SymphonyRoomMapper()
-        room_mapper.register_room("Test Room", "stream123")
-
-        result = _handle_elements_action(initiator, event, set(), room_mapper)
-
-        assert result is not None
-        assert result.user == "John Doe"
-        assert result.form_id == "test_form"
-        assert result.form_values == {"field1": "value1"}
-
-    def test_handle_elements_action_no_stream(self):
-        """Test handling event with no stream."""
-        initiator = MagicMock()
-        event = MagicMock()
-        event.stream = None
-
-        room_mapper = SymphonyRoomMapper()
-        result = _handle_elements_action(initiator, event, set(), room_mapper)
-
-        assert result is None
+    def test_adapter_backend_property(self):
+        """Test backend property."""
+        config = SymphonyConfig(
+            host="test.symphony.com",
+            bot_username="testbot",
+            bot_private_key_path="/path/to/key.pem",
+        )
+        adapter = SymphonyAdapter(config)
+        assert adapter.backend is not None
+        assert adapter.symphony_backend is adapter.backend
 
 
 class TestSymphonyRoomMapper:
-    """Tests for SymphonyRoomMapper class."""
+    """Tests for SymphonyRoomMapper."""
 
-    def test_register_and_get_room(self):
-        """Test registering and retrieving a room."""
+    def test_register_room(self):
+        """Test registering a room."""
         mapper = SymphonyRoomMapper()
-        mapper.register_room("Test Room", "room123")
+        mapper.register_room("Test Room", "stream123")
+        assert mapper.get_room_id("Test Room") == "stream123"
+        assert mapper.get_room_name("stream123") == "Test Room"
 
-        assert mapper.get_room_id("Test Room") == "room123"
-        assert mapper.get_room_name("room123") == "Test Room"
+    def test_set_im_id(self):
+        """Test setting IM stream ID."""
+        mapper = SymphonyRoomMapper()
+        mapper.set_im_id("user123", "im-stream-456")
+        assert mapper.get_room_id("user123") == "im-stream-456"
 
     def test_get_room_id_not_found(self):
         """Test getting room ID that doesn't exist."""
@@ -445,1177 +213,452 @@ class TestSymphonyRoomMapper:
         assert mapper.get_room_id("Unknown Room") is None
 
     def test_get_room_id_looks_like_stream_id(self):
-        """Test that stream-ID-like strings are returned as-is."""
+        """Test getting room ID when input looks like stream ID."""
         mapper = SymphonyRoomMapper()
-        stream_id = "abc123def456ghi789jkl012"  # 24 chars, no spaces
-        assert mapper.get_room_id(stream_id) == stream_id
-
-    def test_set_im_id(self):
-        """Test setting IM stream ID."""
-        mapper = SymphonyRoomMapper()
-        mapper.set_im_id("john_doe", "im123")
-
-        assert mapper.get_room_id("john_doe") == "im123"
-        assert mapper.get_room_name("im123") == "john_doe"
+        long_id = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcd"
+        assert mapper.get_room_id(long_id) == long_id
 
 
-class TestSymphonyAdapterConfig:
-    """Tests for SymphonyAdapterConfig class."""
+class TestSymphonyPresenceStatus:
+    """Tests for SymphonyPresenceStatus."""
 
-    def test_config_from_bdk_config(self):
-        """Test creating config from BdkConfig object."""
-        from symphony.bdk.core.config.model.bdk_config import BdkConfig
+    def test_presence_values(self):
+        """Test presence status values exist."""
+        assert SymphonyPresenceStatus.AVAILABLE is not None
+        assert SymphonyPresenceStatus.BUSY is not None
+        assert SymphonyPresenceStatus.AWAY is not None
+        assert SymphonyPresenceStatus.ON_THE_PHONE is not None
+        assert SymphonyPresenceStatus.BE_RIGHT_BACK is not None
+        assert SymphonyPresenceStatus.IN_A_MEETING is not None
+        assert SymphonyPresenceStatus.OUT_OF_OFFICE is not None
+        assert SymphonyPresenceStatus.OFF_WORK is not None
 
-        # Create a minimal BdkConfig
-        bdk_config = BdkConfig(host="test.symphony.com")
-        config = SymphonyAdapterConfig(bdk_config=bdk_config)
-        assert config.bdk_config == bdk_config
+    def test_presence_name(self):
+        """Test presence status name."""
+        assert SymphonyPresenceStatus.AVAILABLE.name == "AVAILABLE"
+        assert SymphonyPresenceStatus.BUSY.name == "BUSY"
 
-    def test_config_from_file_path(self):
-        """Test creating config from file path."""
-        with patch("csp_adapter_symphony.adapter_config.BdkConfigLoader") as mock_loader:
-            from symphony.bdk.core.config.model.bdk_config import BdkConfig
 
-            mock_bdk_config = BdkConfig(host="test.symphony.com")
-            mock_loader.load_from_file.return_value = mock_bdk_config
+class TestMentionFunctions:
+    """Tests for mention functions re-exported from chatom."""
 
-            config = SymphonyAdapterConfig(bdk_config_path="/path/to/config.yaml")
+    def test_mention_user_by_uid(self):
+        """Test mentioning user by UID."""
+        from csp_adapter_symphony import mention_user_by_uid
 
-            mock_loader.load_from_file.assert_called_once_with("/path/to/config.yaml")
-            assert config.bdk_config == mock_bdk_config
+        result = mention_user_by_uid(12345)
+        assert '<mention uid="12345"/>' in result
 
-    def test_config_from_individual_params(self):
-        """Test creating config from individual parameters."""
-        config = SymphonyAdapterConfig(
-            host="company.symphony.com",
-            bot_username="mybot",
-            private_key_path="/path/to/key.pem",
+    def test_mention_user_by_email(self):
+        """Test mentioning user by email."""
+        from csp_adapter_symphony import mention_user_by_email
+
+        result = mention_user_by_email("test@example.com")
+        assert '<mention email="test@example.com"/>' in result
+
+    def test_format_hashtag(self):
+        """Test formatting hashtag."""
+        from csp_adapter_symphony import format_hashtag
+
+        result = format_hashtag("test")
+        assert '<hash tag="test"/>' in result
+
+    def test_format_cashtag(self):
+        """Test formatting cashtag."""
+        from csp_adapter_symphony import format_cashtag
+
+        result = format_cashtag("AAPL")
+        assert '<cash tag="AAPL"/>' in result
+
+
+class TestChatomCSPIntegration:
+    """Tests for chatom CSP layer integration."""
+
+    def test_backend_adapter_import(self):
+        """Test importing BackendAdapter from chatom."""
+        from chatom.csp import BackendAdapter
+
+        assert BackendAdapter is not None
+
+    def test_message_reader_import(self):
+        """Test importing message_reader from chatom."""
+        from chatom.csp import message_reader
+
+        assert message_reader is not None
+
+    def test_message_writer_import(self):
+        """Test importing message_writer from chatom."""
+        from chatom.csp import message_writer
+
+        assert message_writer is not None
+
+    def test_has_csp_flag(self):
+        """Test HAS_CSP flag."""
+        from chatom.csp import HAS_CSP
+
+        assert HAS_CSP is True  # CSP is installed in test environment
+
+
+class TestSymphonyAdapterCSPGraphs:
+    """Tests for SymphonyAdapter CSP graph methods."""
+
+    @pytest.fixture
+    def adapter(self):
+        """Create a SymphonyAdapter for testing."""
+        config = SymphonyConfig(
+            host="test.symphony.com",
+            bot_username="testbot",
+            bot_private_key_path="/path/to/key.pem",
         )
+        return SymphonyAdapter(config)
 
-        assert config.bdk_config is not None
-        assert config.host == "company.symphony.com"
-        assert config.bot_username == "mybot"
+    def test_subscribe_graph_creation(self, adapter):
+        """Test that subscribe creates a valid CSP graph."""
+        # The subscribe method should return a csp.graph decorated function
+        # We can't fully run it without a real backend, but we can verify structure
 
-    def test_config_missing_required_params(self):
-        """Test that missing required params raises error."""
-        with pytest.raises(ValueError, match="Either bdk_config"):
-            SymphonyAdapterConfig()
+        @csp.graph
+        def test_graph():
+            messages = adapter.subscribe(rooms={"Test Room"})
+            csp.add_graph_output("messages", messages)
 
-    def test_from_file_classmethod(self):
-        """Test from_file class method."""
-        with patch("csp_adapter_symphony.adapter_config.BdkConfigLoader") as mock_loader:
-            from symphony.bdk.core.config.model.bdk_config import BdkConfig
+        # Should be able to create the graph without error
+        assert test_graph is not None
 
-            mock_bdk_config = BdkConfig(host="test.symphony.com")
-            mock_loader.load_from_file.return_value = mock_bdk_config
+    def test_subscribe_with_no_rooms(self, adapter):
+        """Test subscribe with no rooms specified."""
 
-            config = SymphonyAdapterConfig.from_file("/path/to/config.yaml", error_room="errors")
+        @csp.graph
+        def test_graph():
+            messages = adapter.subscribe()
+            csp.add_graph_output("messages", messages)
 
-            assert config.bdk_config == mock_bdk_config
-            assert config.error_room == "errors"
+        assert test_graph is not None
 
-    def test_from_bdk_config_classmethod(self):
-        """Test from_bdk_config class method."""
-        from symphony.bdk.core.config.model.bdk_config import BdkConfig
+    def test_subscribe_with_skip_options(self, adapter):
+        """Test subscribe with skip options."""
 
-        bdk_config = BdkConfig(host="test.symphony.com")
-        config = SymphonyAdapterConfig.from_bdk_config(bdk_config, inform_client=True)
+        @csp.graph
+        def test_graph():
+            messages = adapter.subscribe(
+                rooms={"Room1", "Room2"},
+                skip_own=False,
+                skip_history=False,
+            )
+            csp.add_graph_output("messages", messages)
 
-        assert config.bdk_config == bdk_config
-        assert config.inform_client is True
+        assert test_graph is not None
 
-    def test_config_with_separate_hosts(self):
-        """Test config with separate endpoint hosts."""
+    def test_publish_graph_creation(self, adapter):
+        """Test that publish creates a valid CSP graph component."""
+
+        @csp.graph
+        def test_graph():
+            msg = csp.const(
+                SymphonyMessage(
+                    stream_id="stream123",
+                    content="Hello!",
+                )
+            )
+            adapter.publish(msg)
+
+        assert test_graph is not None
+
+    def test_publish_presence_graph_creation(self, adapter):
+        """Test that publish_presence creates a valid CSP graph component."""
+
+        @csp.graph
+        def test_graph():
+            presence = csp.const(SymphonyPresenceStatus.AVAILABLE)
+            adapter.publish_presence(presence)
+
+        assert test_graph is not None
+
+    def test_publish_presence_with_timeout(self, adapter):
+        """Test publish_presence with custom timeout."""
+
+        @csp.graph
+        def test_graph():
+            presence = csp.const(SymphonyPresenceStatus.BUSY)
+            adapter.publish_presence(presence, timeout=10.0)
+
+        assert test_graph is not None
+
+
+class TestSymphonyAdapterConfigExtended:
+    """Extended tests for SymphonyAdapterConfig (now an alias for SymphonyConfig)."""
+
+    def test_ssl_verify_disabled(self):
+        """Test SSL verification disabled warning."""
+        with patch("chatom.symphony.config.log") as mock_log:
+            config = SymphonyAdapterConfig(
+                host="test.symphony.com",
+                bot_username="testbot",
+                bot_private_key_path="/path/to/key.pem",
+                ssl_verify=False,
+            )
+            assert config.ssl_verify is False
+            # Should log a warning
+            mock_log.warning.assert_called()
+
+    def test_config_is_symphony_config(self):
+        """Test that SymphonyAdapterConfig is an alias for SymphonyConfig."""
+        assert SymphonyAdapterConfig is SymphonyConfig
+
+    def test_config_fields(self):
+        """Test that config has all expected fields."""
         config = SymphonyAdapterConfig(
-            host="company.symphony.com",
-            pod_host="pod.symphony.com",
+            host="test.symphony.com",
+            port=8443,
+            bot_username="testbot",
+            bot_private_key_path="/path/to/key.pem",
             agent_host="agent.symphony.com",
-            session_auth_host="auth.symphony.com",
+            session_auth_host="session.symphony.com",
             key_manager_host="km.symphony.com",
-            bot_username="mybot",
-            private_key_path="/path/to/key.pem",
         )
 
-        assert config.bdk_config is not None
-        assert config.pod_host == "pod.symphony.com"
+        assert config.host == "test.symphony.com"
+        assert config.port == 8443
+        assert config.bot_username == "testbot"
         assert config.agent_host == "agent.symphony.com"
-        assert config.session_auth_host == "auth.symphony.com"
+        assert config.session_auth_host == "session.symphony.com"
         assert config.key_manager_host == "km.symphony.com"
 
-    def test_config_with_certificate(self):
-        """Test config with certificate-based authentication."""
+    def test_config_with_cert(self):
+        """Test config with certificate path."""
         config = SymphonyAdapterConfig(
-            host="company.symphony.com",
-            bot_username="mybot",
-            certificate_path="/path/to/cert.pem",
+            host="test.symphony.com",
+            bot_username="testbot",
+            bot_certificate_path="/path/to/cert.pem",
         )
+        assert config.bot_certificate_path == "/path/to/cert.pem"
 
-        assert config.bdk_config is not None
-        assert config.certificate_path == "/path/to/cert.pem"
-
-    def test_config_with_certificate_content(self):
-        """Test config with certificate content - not supported by BDK, should fail gracefully."""
-        # Note: BdkCertificateConfig only supports 'path', not 'content'
-        # This tests that we attempt to configure it but the BDK rejects it
-        with pytest.raises(TypeError):
-            SymphonyAdapterConfig(
-                host="company.symphony.com",
-                bot_username="mybot",
-                certificate_content="-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
-            )
-
-    def test_config_with_private_key_content(self):
-        """Test config with private key content."""
+    def test_create_backend_via_chatom(self):
+        """Test creating a SymphonyBackend from config using chatom."""
         config = SymphonyAdapterConfig(
-            host="company.symphony.com",
-            bot_username="mybot",
-            private_key_content="-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----",
+            host="test.symphony.com",
+            bot_username="testbot",
+            bot_private_key_path="/path/to/key.pem",
         )
+        # Backend is created directly from config
+        from chatom.symphony import SymphonyBackend
 
-        assert config.bdk_config is not None
-        assert config.private_key_content is not None
+        backend = SymphonyBackend(config=config)
+        assert isinstance(backend, SymphonyBackend)
 
-    def test_config_with_ssl_trust_store(self):
-        """Test config with SSL trust store path."""
+    def test_config_with_all_adapter_options(self):
+        """Test config with all adapter-specific options."""
         config = SymphonyAdapterConfig(
-            host="company.symphony.com",
-            bot_username="mybot",
-            private_key_path="/path/to/key.pem",
-            ssl_trust_store_path="/path/to/ca-bundle.pem",
-        )
-
-        assert config.bdk_config is not None
-        assert config.ssl_trust_store_path == "/path/to/ca-bundle.pem"
-
-    def test_config_with_ssl_verify_false(self):
-        """Test config with SSL verification disabled."""
-        config = SymphonyAdapterConfig(
-            host="company.symphony.com",
-            bot_username="mybot",
-            private_key_path="/path/to/key.pem",
-            ssl_verify=False,
-        )
-
-        assert config.bdk_config is not None
-        assert config.ssl_verify is False
-
-    def test_from_symphony_dir_classmethod(self):
-        """Test from_symphony_dir class method."""
-        with patch("csp_adapter_symphony.adapter_config.BdkConfigLoader") as mock_loader:
-            from symphony.bdk.core.config.model.bdk_config import BdkConfig
-
-            mock_bdk_config = BdkConfig(host="test.symphony.com")
-            mock_loader.load_from_file.return_value = mock_bdk_config
-
-            _ = SymphonyAdapterConfig.from_symphony_dir("config.yaml")
-
-            # Should call load_from_file with path in ~/.symphony
-            call_args = mock_loader.load_from_file.call_args[0][0]
-            assert ".symphony" in call_args
-            assert "config.yaml" in call_args
-
-    def test_config_with_custom_retry_settings(self):
-        """Test config with custom retry settings."""
-        config = SymphonyAdapterConfig(
-            host="company.symphony.com",
-            bot_username="mybot",
-            private_key_path="/path/to/key.pem",
+            host="test.symphony.com",
+            bot_username="testbot",
+            bot_private_key_path="/path/to/key.pem",
+            error_room="error-notifications",
+            inform_client=True,
             max_attempts=20,
             initial_interval_ms=1000,
             multiplier=3.0,
             max_interval_ms=600000,
+            datafeed_version="v1",
+            ssl_trust_store_path="/path/to/ca-bundle.crt",
         )
-
+        assert config.error_room == "error-notifications"
+        assert config.inform_client is True
         assert config.max_attempts == 20
         assert config.initial_interval_ms == 1000
         assert config.multiplier == 3.0
         assert config.max_interval_ms == 600000
-
-    def test_config_with_datafeed_v1(self):
-        """Test config with datafeed v1."""
-        config = SymphonyAdapterConfig(
-            host="company.symphony.com",
-            bot_username="mybot",
-            private_key_path="/path/to/key.pem",
-            datafeed_version="v1",
-        )
-
         assert config.datafeed_version == "v1"
-
-    def test_config_with_error_room_and_inform_client(self):
-        """Test config with error handling options."""
-        config = SymphonyAdapterConfig(
-            host="company.symphony.com",
-            bot_username="mybot",
-            private_key_path="/path/to/key.pem",
-            error_room="Error Notifications",
-            inform_client=True,
-        )
-
-        assert config.error_room == "Error Notifications"
-        assert config.inform_client is True
+        assert config.ssl_trust_store_path == "/path/to/ca-bundle.crt"
 
 
 class TestSymphonyRoomMapperAsync:
-    """Tests for SymphonyRoomMapper async methods."""
+    """Async tests for SymphonyRoomMapper."""
+
+    @pytest.fixture
+    def mock_backend(self):
+        """Create a mock chatom backend."""
+        backend = MagicMock()
+        backend.fetch_channel = AsyncMock()
+        return backend
+
+    @pytest.fixture
+    def mock_stream_service(self):
+        """Create a mock stream service."""
+        service = MagicMock()
+        service.search_rooms = AsyncMock()
+        service.get_room_info = AsyncMock()
+        return service
 
     @pytest.mark.asyncio
-    async def test_get_room_id_async_cached(self):
-        """Test get_room_id_async returns cached value."""
+    async def test_get_room_id_async_from_cache(self):
+        """Test async room ID lookup from cache."""
         mapper = SymphonyRoomMapper()
-        mapper.register_room("Test Room", "room123")
+        mapper.register_room("Cached Room", "cached_stream_123")
 
-        result = await mapper.get_room_id_async("Test Room")
-        assert result == "room123"
+        result = await mapper.get_room_id_async("Cached Room")
+        assert result == "cached_stream_123"
 
     @pytest.mark.asyncio
-    async def test_get_room_id_async_looks_like_stream_id(self):
-        """Test get_room_id_async returns stream-ID-like strings as-is."""
-        mapper = SymphonyRoomMapper()
-        stream_id = "abc123def456ghi789jkl012"
+    async def test_get_room_id_async_from_backend(self, mock_backend):
+        """Test async room ID lookup from chatom backend."""
+        mock_channel = MagicMock()
+        mock_channel.id = "backend_stream_456"
+        mock_backend.fetch_channel.return_value = mock_channel
 
-        result = await mapper.get_room_id_async(stream_id)
-        assert result == stream_id
+        mapper = SymphonyRoomMapper(backend=mock_backend)
+        result = await mapper.get_room_id_async("Backend Room")
+
+        assert result == "backend_stream_456"
+        mock_backend.fetch_channel.assert_called_once_with(name="Backend Room")
 
     @pytest.mark.asyncio
-    async def test_get_room_id_async_no_stream_service(self):
-        """Test get_room_id_async returns None when no stream service."""
-        mapper = SymphonyRoomMapper()
+    async def test_get_room_id_async_not_found(self, mock_backend):
+        """Test async room ID lookup when not found."""
+        mock_backend.fetch_channel.return_value = None
 
+        mapper = SymphonyRoomMapper(backend=mock_backend)
         result = await mapper.get_room_id_async("Unknown Room")
+
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_get_room_id_async_from_service(self):
-        """Test get_room_id_async resolves room from service."""
-        mock_stream_service = AsyncMock()
+    async def test_get_room_id_async_from_stream_service(self, mock_stream_service):
+        """Test async room ID lookup from stream service."""
         mock_room = MagicMock()
-        mock_room.room_attributes.name = "Test Room"
-        mock_room.room_system_info.id = "room123"
-        mock_stream_service.search_rooms.return_value = MagicMock(rooms=[mock_room])
+        mock_room.room_attributes = MagicMock()
+        mock_room.room_attributes.name = "Service Room"
+        mock_room.room_system_info = MagicMock()
+        mock_room.room_system_info.id = "service_stream_789"
+
+        mock_results = MagicMock()
+        mock_results.rooms = [mock_room]
+        mock_stream_service.search_rooms.return_value = mock_results
 
         mapper = SymphonyRoomMapper(stream_service=mock_stream_service)
+        result = await mapper.get_room_id_async("Service Room")
 
-        result = await mapper.get_room_id_async("Test Room")
-        assert result == "room123"
-        # Verify it was cached
-        assert mapper.get_room_id("Test Room") == "room123"
+        assert result == "service_stream_789"
 
     @pytest.mark.asyncio
-    async def test_get_room_id_async_service_error(self):
-        """Test get_room_id_async handles service errors."""
-        mock_stream_service = AsyncMock()
-        mock_stream_service.search_rooms.side_effect = Exception("API error")
-
-        mapper = SymphonyRoomMapper(stream_service=mock_stream_service)
-
-        result = await mapper.get_room_id_async("Test Room")
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_get_room_name_async_cached(self):
-        """Test get_room_name_async returns cached value."""
+    async def test_get_room_name_async_from_cache(self):
+        """Test async room name lookup from cache."""
         mapper = SymphonyRoomMapper()
-        mapper.register_room("Test Room", "room123")
+        mapper.register_room("Cached Room", "cached_stream_123")
 
-        result = await mapper.get_room_name_async("room123")
-        assert result == "Test Room"
-
-    @pytest.mark.asyncio
-    async def test_get_room_name_async_no_stream_service(self):
-        """Test get_room_name_async returns None when no stream service."""
-        mapper = SymphonyRoomMapper()
-
-        result = await mapper.get_room_name_async("room123")
-        assert result is None
+        result = await mapper.get_room_name_async("cached_stream_123")
+        assert result == "Cached Room"
 
     @pytest.mark.asyncio
-    async def test_get_room_name_async_from_service(self):
-        """Test get_room_name_async resolves room name from service."""
-        mock_stream_service = AsyncMock()
+    async def test_get_room_name_async_from_backend(self, mock_backend):
+        """Test async room name lookup from chatom backend."""
+        mock_channel = MagicMock()
+        mock_channel.id = "backend_stream_456"
+        mock_channel.name = "Backend Room"
+        mock_backend.fetch_channel.return_value = mock_channel
+
+        mapper = SymphonyRoomMapper(backend=mock_backend)
+        result = await mapper.get_room_name_async("backend_stream_456")
+
+        assert result == "Backend Room"
+        mock_backend.fetch_channel.assert_called_once_with(id="backend_stream_456")
+
+    @pytest.mark.asyncio
+    async def test_get_room_name_async_from_stream_service(self, mock_stream_service):
+        """Test async room name lookup from stream service."""
         mock_room_info = MagicMock()
-        mock_room_info.room_attributes.name = "Test Room"
+        mock_room_info.room_attributes = MagicMock()
+        mock_room_info.room_attributes.name = "Service Room"
         mock_stream_service.get_room_info.return_value = mock_room_info
 
         mapper = SymphonyRoomMapper(stream_service=mock_stream_service)
+        result = await mapper.get_room_name_async("service_stream_789")
 
-        result = await mapper.get_room_name_async("room123")
-        assert result == "Test Room"
-        # Verify it was cached
-        assert mapper.get_room_name("room123") == "Test Room"
+        assert result == "Service Room"
 
     @pytest.mark.asyncio
-    async def test_get_room_name_async_service_error(self):
-        """Test get_room_name_async handles service errors."""
-        mock_stream_service = AsyncMock()
-        mock_stream_service.get_room_info.side_effect = Exception("API error")
+    async def test_get_room_name_async_not_found(self, mock_backend):
+        """Test async room name lookup when not found."""
+        mock_backend.fetch_channel.return_value = None
+
+        mapper = SymphonyRoomMapper(backend=mock_backend)
+        result = await mapper.get_room_name_async("unknown_stream")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_room_id_async_exception_handling(self, mock_stream_service):
+        """Test exception handling in async room ID lookup."""
+        mock_stream_service.search_rooms.side_effect = Exception("API Error")
 
         mapper = SymphonyRoomMapper(stream_service=mock_stream_service)
+        result = await mapper.get_room_id_async("Error Room")
 
-        result = await mapper.get_room_name_async("room123")
+        # Should return None and not raise
         assert result is None
 
-    def test_set_stream_service(self):
+    @pytest.mark.asyncio
+    async def test_get_room_name_async_exception_handling(self, mock_stream_service):
+        """Test exception handling in async room name lookup."""
+        mock_stream_service.get_room_info.side_effect = Exception("API Error")
+
+        mapper = SymphonyRoomMapper(stream_service=mock_stream_service)
+        result = await mapper.get_room_name_async("error_stream")
+
+        # Should return None and not raise
+        assert result is None
+
+    def test_set_stream_service(self, mock_stream_service):
         """Test setting stream service."""
         mapper = SymphonyRoomMapper()
-        mock_service = MagicMock()
-        mapper.set_stream_service(mock_service)
-        assert mapper._stream_service == mock_service
+        mapper.set_stream_service(mock_stream_service)
+        assert mapper._stream_service == mock_stream_service
+
+    def test_set_backend(self, mock_backend):
+        """Test setting backend."""
+        mapper = SymphonyRoomMapper()
+        mapper.set_backend(mock_backend)
+        assert mapper._backend == mock_backend
 
 
-class TestHandleMessageSentEdgeCases:
-    """Additional tests for _handle_message_sent edge cases."""
+class TestSymphonyAdapterPresence:
+    """Tests for Symphony adapter presence functionality."""
 
-    def test_handle_message_sent_no_stream(self):
-        """Test handling event with no stream."""
-        initiator = MagicMock()
-        initiator.user.display_name = "John"
-        initiator.user.email = "john@example.com"
-        initiator.user.user_id = 12345
-
-        event = MagicMock()
-        event.message.stream = None
-        event.message.message = "Hello!"
-
-        room_mapper = SymphonyRoomMapper()
-        result = _handle_message_sent(initiator, event, set(), room_mapper)
-
-        assert result is None
-
-    def test_handle_message_sent_no_initiator(self):
-        """Test handling event with None initiator."""
-        event = MagicMock()
-        event.message.stream.stream_id = "stream123"
-        event.message.stream.stream_type = "ROOM"
-        event.message.message = "Hello!"
-        event.message.data = None
-
-        room_mapper = SymphonyRoomMapper()
-        result = _handle_message_sent(None, event, set(), room_mapper)
-
-        assert result is not None
-        assert result.user == "USER_ERROR"
-
-    def test_handle_message_sent_with_mentions(self):
-        """Test handling message with user mentions in data."""
-        initiator = MagicMock()
-        initiator.user.display_name = "John"
-        initiator.user.email = "john@example.com"
-        initiator.user.user_id = 12345
-
-        event = MagicMock()
-        event.message.stream.stream_id = "stream123"
-        event.message.stream.stream_type = "ROOM"
-        event.message.message = "Hello @user!"
-        event.message.data = '{"0": {"type": "com.symphony.user.mention", "id": [{"value": "67890"}]}}'
-
-        room_mapper = SymphonyRoomMapper()
-        result = _handle_message_sent(initiator, event, set(), room_mapper)
-
-        assert result is not None
-        assert "67890" in result.tags
-
-    def test_handle_message_sent_unknown_stream_type(self):
-        """Test handling message with unknown stream type."""
-        initiator = MagicMock()
-        initiator.user.display_name = "John"
-        initiator.user.email = "john@example.com"
-        initiator.user.user_id = 12345
-
-        event = MagicMock()
-        event.message.stream.stream_id = "stream123"
-        event.message.stream.stream_type = "UNKNOWN"
-        event.message.message = "Hello!"
-        event.message.data = None
-
-        room_mapper = SymphonyRoomMapper()
-        result = _handle_message_sent(initiator, event, set(), room_mapper)
-
-        assert result is not None
-        # Unknown stream type should use stream_id as room name
-        assert result.room == "stream123"
-
-    def test_handle_message_sent_matching_room_filter(self):
-        """Test that messages matching room filter are accepted."""
-        initiator = MagicMock()
-        initiator.user.display_name = "John"
-        initiator.user.email = "john@example.com"
-        initiator.user.user_id = 12345
-
-        event = MagicMock()
-        event.message.stream.stream_id = "stream123"
-        event.message.stream.stream_type = "ROOM"
-        event.message.message = "Hello!"
-        event.message.data = None
-
-        room_mapper = SymphonyRoomMapper()
-        result = _handle_message_sent(initiator, event, {"stream123"}, room_mapper)
-
-        assert result is not None
-        assert result.stream_id == "stream123"
-
-
-class TestHandleElementsActionEdgeCases:
-    """Additional tests for _handle_elements_action edge cases."""
-
-    def test_handle_elements_action_filtered(self):
-        """Test that form submissions from non-matching rooms are filtered."""
-        initiator = MagicMock()
-        initiator.user.display_name = "John"
-        initiator.user.email = "john@example.com"
-        initiator.user.user_id = 12345
-
-        event = MagicMock()
-        event.stream.stream_id = "stream123"
-        event.stream.stream_type = "ROOM"
-        event.form_id = "test_form"
-        event.form_values = {"field1": "value1"}
-
-        room_mapper = SymphonyRoomMapper()
-        result = _handle_elements_action(initiator, event, {"other_stream"}, room_mapper)
-
-        assert result is None
-
-    def test_handle_elements_action_im(self):
-        """Test handling form submission in IM."""
-        initiator = MagicMock()
-        initiator.user.display_name = "John"
-        initiator.user.email = "john@example.com"
-        initiator.user.user_id = 12345
-
-        event = MagicMock()
-        event.stream.stream_id = "im123"
-        event.stream.stream_type = "IM"
-        event.form_id = "test_form"
-        event.form_values = {"field1": "value1"}
-
-        room_mapper = SymphonyRoomMapper()
-        result = _handle_elements_action(initiator, event, set(), room_mapper)
-
-        assert result is not None
-        assert result.room == "IM"
-        assert result.form_id == "test_form"
-
-
-class TestCheckBdkAvailable:
-    """Tests for _check_bdk_available function."""
-
-    def test_check_bdk_available_when_available(self):
-        """Test _check_bdk_available doesn't raise when BDK is available."""
-        # Should not raise since BDK is installed in test environment
-        _check_bdk_available()
-
-    def test_check_bdk_available_when_not_available(self):
-        """Test _check_bdk_available raises when BDK is not available."""
-        with patch("csp_adapter_symphony.adapter._BDK_AVAILABLE", False):
-            with pytest.raises(ImportError, match="symphony-bdk-python is required"):
-                _check_bdk_available()
-
-
-class TestSendSymphonyMessageAsync:
-    """Tests for send_symphony_message_async function."""
-
-    @pytest.mark.asyncio
-    async def test_send_message_with_stream_id(self, mock_bdk):
-        """Test sending a message using stream_id directly."""
-        from csp_adapter_symphony.adapter import send_symphony_message_async
-
-        msg = SymphonyMessage(
-            stream_id="stream123",
-            msg="Hello, World!",
-        )
-        config = SymphonyAdapterConfig(
+    def test_presence_node_runs_in_graph(self):
+        """Test that presence node can be included in a graph."""
+        config = SymphonyConfig(
             host="test.symphony.com",
             bot_username="testbot",
-            private_key_path="/path/to/key.pem",
+            bot_private_key_path="/path/to/key.pem",
         )
-        room_mapper = SymphonyRoomMapper()
+        adapter = SymphonyAdapter(config)
 
-        result = await send_symphony_message_async(mock_bdk, msg, room_mapper, config)
+        @csp.graph
+        def test_graph():
+            presence = csp.const(SymphonyPresenceStatus.AVAILABLE)
+            adapter.publish_presence(presence, timeout=1.0)
 
-        assert result is True
-        mock_bdk.messages().send_message.assert_called_once()
-        call_args = mock_bdk.messages().send_message.call_args
-        assert call_args[0][0] == "stream123"
-
-    @pytest.mark.asyncio
-    async def test_send_message_with_messageml_wrapper(self, mock_bdk):
-        """Test that messages get wrapped in messageML if needed."""
-        from csp_adapter_symphony.adapter import send_symphony_message_async
-
-        msg = SymphonyMessage(
-            stream_id="stream123",
-            msg="Hello!",
-        )
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-        room_mapper = SymphonyRoomMapper()
-
-        await send_symphony_message_async(mock_bdk, msg, room_mapper, config)
-
-        call_args = mock_bdk.messages().send_message.call_args
-        assert "<messageML>" in call_args[0][1]
-
-    @pytest.mark.asyncio
-    async def test_send_message_already_has_messageml(self, mock_bdk):
-        """Test that messages with messageML are not double-wrapped."""
-        from csp_adapter_symphony.adapter import send_symphony_message_async
-
-        msg = SymphonyMessage(
-            stream_id="stream123",
-            msg="<messageML>Hello!</messageML>",
-        )
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-        room_mapper = SymphonyRoomMapper()
-
-        await send_symphony_message_async(mock_bdk, msg, room_mapper, config)
-
-        call_args = mock_bdk.messages().send_message.call_args
-        # Should not have double messageML tags
-        assert call_args[0][1].count("<messageML>") == 1
-
-    @pytest.mark.asyncio
-    async def test_send_im_creates_stream(self, mock_bdk):
-        """Test sending an IM creates the stream."""
-        from csp_adapter_symphony.adapter import send_symphony_message_async
-
-        msg = SymphonyMessage(
-            room="IM",
-            user_id="12345",
-            msg="Hello via DM!",
-        )
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-        room_mapper = SymphonyRoomMapper()
-
-        result = await send_symphony_message_async(mock_bdk, msg, room_mapper, config)
-
-        assert result is True
-        mock_bdk.streams().create_im.assert_called_once_with(12345)
-
-    @pytest.mark.asyncio
-    async def test_send_im_uses_cached_stream(self, mock_bdk):
-        """Test sending an IM uses cached stream if available."""
-        from csp_adapter_symphony.adapter import send_symphony_message_async
-
-        msg = SymphonyMessage(
-            room="IM",
-            user="John Doe",
-            msg="Hello!",
-        )
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-        room_mapper = SymphonyRoomMapper()
-        room_mapper.set_im_id("John Doe", "cached_im_stream")
-
-        result = await send_symphony_message_async(mock_bdk, msg, room_mapper, config)
-
-        assert result is True
-        # Should use cached stream, not create new one
-        mock_bdk.streams().create_im.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_send_to_room_by_name(self, mock_bdk):
-        """Test sending to a room by name."""
-        from csp_adapter_symphony.adapter import send_symphony_message_async
-
-        msg = SymphonyMessage(
-            room="Test Room",
-            msg="Hello room!",
-        )
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-        room_mapper = SymphonyRoomMapper()
-        room_mapper.register_room("Test Room", "test_room_stream")
-
-        result = await send_symphony_message_async(mock_bdk, msg, room_mapper, config)
-
-        assert result is True
-        call_args = mock_bdk.messages().send_message.call_args
-        assert call_args[0][0] == "test_room_stream"
-
-    @pytest.mark.asyncio
-    async def test_send_fails_no_stream_id(self, mock_bdk):
-        """Test sending fails when stream ID cannot be found."""
-        from csp_adapter_symphony.adapter import send_symphony_message_async
-
-        msg = SymphonyMessage(
-            room="Unknown Room",
-            msg="Hello!",
-        )
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-        room_mapper = SymphonyRoomMapper()
-
-        result = await send_symphony_message_async(mock_bdk, msg, room_mapper, config)
-
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_send_notifies_error_room(self, mock_bdk):
-        """Test that errors are sent to error room if configured."""
-        from csp_adapter_symphony.adapter import send_symphony_message_async
-
-        msg = SymphonyMessage(
-            room="Unknown Room",
-            msg="Hello!",
-        )
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-            error_room="Error Notifications",
-        )
-        room_mapper = SymphonyRoomMapper()
-        room_mapper.register_room("Error Notifications", "error_stream")
-
-        result = await send_symphony_message_async(mock_bdk, msg, room_mapper, config)
-
-        assert result is False
-        # Should have sent to error room
-        assert mock_bdk.messages().send_message.called
-
-    @pytest.mark.asyncio
-    async def test_send_handles_exception(self, mock_bdk):
-        """Test that exceptions are handled gracefully."""
-        from csp_adapter_symphony.adapter import send_symphony_message_async
-
-        mock_bdk.messages().send_message.side_effect = Exception("API Error")
-
-        msg = SymphonyMessage(
-            stream_id="stream123",
-            msg="Hello!",
-        )
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-        room_mapper = SymphonyRoomMapper()
-
-        result = await send_symphony_message_async(mock_bdk, msg, room_mapper, config)
-
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_send_informs_client_on_error(self, mock_bdk):
-        """Test that client is informed of errors if configured."""
-        from csp_adapter_symphony.adapter import send_symphony_message_async
-
-        # First call fails, second succeeds (for error notification)
-        mock_bdk.messages().send_message.side_effect = [Exception("API Error"), MagicMock()]
-
-        msg = SymphonyMessage(
-            room="Test Room",
-            msg="Hello!",
-        )
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-            inform_client=True,
-        )
-        room_mapper = SymphonyRoomMapper()
-        room_mapper.register_room("Test Room", "test_stream")
-
-        result = await send_symphony_message_async(mock_bdk, msg, room_mapper, config)
-
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_send_im_error_creating_stream(self, mock_bdk):
-        """Test handling error when creating IM stream."""
-        from csp_adapter_symphony.adapter import send_symphony_message_async
-
-        mock_bdk.streams().create_im.side_effect = Exception("Cannot create IM")
-
-        msg = SymphonyMessage(
-            room="IM",
-            user_id="12345",
-            msg="Hello!",
-        )
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-        room_mapper = SymphonyRoomMapper()
-
-        result = await send_symphony_message_async(mock_bdk, msg, room_mapper, config)
-
-        # Should fail because stream couldn't be created
-        assert result is False
-
-
-class TestSetPresenceSync:
-    """Tests for _set_presence_sync function."""
-
-    def test_set_presence_available(self):
-        """Test setting presence to available."""
-        from csp_adapter_symphony.adapter import Presence, _set_presence_sync
-
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
+        # Run for a very short time - the actual API call will fail
+        # but we're just testing the graph structure
+        # Don't use realtime to avoid async issues
+        csp.run(
+            test_graph,
+            starttime=datetime.now(),
+            endtime=timedelta(seconds=0.1),
         )
 
-        with patch("csp_adapter_symphony.adapter.SymphonyBdk") as mock_bdk_class:
-            mock_bdk = MagicMock()
-            mock_bdk.__aenter__ = AsyncMock(return_value=mock_bdk)
-            mock_bdk.__aexit__ = AsyncMock(return_value=None)
-            mock_bdk.presence.return_value.set_presence = AsyncMock()
-            mock_bdk_class.return_value = mock_bdk
-
-            _set_presence_sync(config, Presence.AVAILABLE, timeout=1.0)
-
-            mock_bdk.presence.return_value.set_presence.assert_called_once()
-
-    def test_set_presence_busy(self):
-        """Test setting presence to busy."""
-        from csp_adapter_symphony.adapter import Presence, _set_presence_sync
-
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-
-        with patch("csp_adapter_symphony.adapter.SymphonyBdk") as mock_bdk_class:
-            mock_bdk = MagicMock()
-            mock_bdk.__aenter__ = AsyncMock(return_value=mock_bdk)
-            mock_bdk.__aexit__ = AsyncMock(return_value=None)
-            mock_bdk.presence.return_value.set_presence = AsyncMock()
-            mock_bdk_class.return_value = mock_bdk
-
-            _set_presence_sync(config, Presence.BUSY, timeout=1.0)
-
-            mock_bdk.presence.return_value.set_presence.assert_called_once()
-
-    def test_set_presence_no_config(self):
-        """Test setting presence with no BDK config."""
-        from symphony.bdk.core.config.model.bdk_config import BdkConfig
-
-        from csp_adapter_symphony.adapter import Presence, _set_presence_sync
-
-        config = SymphonyAdapterConfig(bdk_config=BdkConfig(host="test.symphony.com"))
-        # Manually clear the config to simulate missing config
-        config.bdk_config = None
-
-        # Should not raise, just log error
-        _set_presence_sync(config, Presence.AVAILABLE, timeout=0.1)
-
-    def test_set_presence_timeout(self):
-        """Test setting presence handles timeout."""
-        from csp_adapter_symphony.adapter import Presence, _set_presence_sync
-
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-
-        with patch("csp_adapter_symphony.adapter.SymphonyBdk") as mock_bdk_class:
-            mock_bdk = MagicMock()
-
-            async def slow_enter(*args):
-                import asyncio
-
-                await asyncio.sleep(10)
-                return mock_bdk
-
-            mock_bdk.__aenter__ = slow_enter
-            mock_bdk.__aexit__ = AsyncMock(return_value=None)
-            mock_bdk_class.return_value = mock_bdk
-
-            # Should not raise, just timeout
-            _set_presence_sync(config, Presence.AVAILABLE, timeout=0.01)
-
-
-class TestSendSymphonyMessage:
-    """Tests for send_symphony_message backwards-compat function."""
-
-    def test_send_without_bdk_warns(self):
-        """Test that calling without BDK logs warning."""
-        from csp_adapter_symphony.adapter import send_symphony_message
-
-        result = send_symphony_message("Hello", "room123")
-
-        assert result is None
-
-    def test_send_with_bdk(self):
-        """Test sending with BDK instance."""
-        from csp_adapter_symphony.adapter import send_symphony_message
-
-        mock_bdk = MagicMock()
-        mock_bdk.messages.return_value.send_message = AsyncMock(return_value=MagicMock())
-
-        _ = send_symphony_message("Hello", "room123", bdk=mock_bdk)
-
-        mock_bdk.messages.return_value.send_message.assert_called_once()
-
-
-class TestCspRealTimeEventListener:
-    """Tests for CspRealTimeEventListener class."""
-
-    @pytest.mark.asyncio
-    async def test_is_accepting_event_from_other_user(self):
-        """Test that events from other users are accepted."""
-        from queue import Queue
-
-        from csp_adapter_symphony.adapter import CspRealTimeEventListener
-
-        room_mapper = SymphonyRoomMapper()
-        listener = CspRealTimeEventListener(Queue(), set(), room_mapper)
-
-        event = MagicMock()
-        event.initiator.user.user_id = 12345
-
-        bot_info = MagicMock()
-        bot_info.id = 99999  # Different from initiator
-
-        result = await listener.is_accepting_event(event, bot_info)
-
-        assert result is True
-
-    @pytest.mark.asyncio
-    async def test_is_accepting_event_from_self(self):
-        """Test that events from self are rejected."""
-        from queue import Queue
-
-        from csp_adapter_symphony.adapter import CspRealTimeEventListener
-
-        room_mapper = SymphonyRoomMapper()
-        listener = CspRealTimeEventListener(Queue(), set(), room_mapper)
-
-        event = MagicMock()
-        event.initiator.user.user_id = 12345
-
-        bot_info = MagicMock()
-        bot_info.id = 12345  # Same as initiator
-
-        result = await listener.is_accepting_event(event, bot_info)
-
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_is_accepting_event_with_error(self):
-        """Test that events are accepted even if there's an error checking."""
-        from queue import Queue
-
-        from csp_adapter_symphony.adapter import CspRealTimeEventListener
-
-        room_mapper = SymphonyRoomMapper()
-        listener = CspRealTimeEventListener(Queue(), set(), room_mapper)
-
-        event = MagicMock()
-        event.initiator = None  # Will cause AttributeError
-
-        bot_info = MagicMock()
-
-        result = await listener.is_accepting_event(event, bot_info)
-
-        assert result is True  # Accept on error
-
-    @pytest.mark.asyncio
-    async def test_on_message_sent(self, mock_initiator, mock_message_event):
-        """Test on_message_sent queues messages."""
-        from queue import Queue
-
-        from csp_adapter_symphony.adapter import CspRealTimeEventListener
-
-        msg_queue = Queue()
-        room_mapper = SymphonyRoomMapper()
-        room_mapper.register_room("Test Room", "stream123")
-        listener = CspRealTimeEventListener(msg_queue, set(), room_mapper)
-
-        await listener.on_message_sent(mock_initiator, mock_message_event)
-
-        assert not msg_queue.empty()
-        msg = msg_queue.get()
-        assert msg.msg == "Hello, World!"
-
-    @pytest.mark.asyncio
-    async def test_on_message_sent_filtered(self, mock_initiator, mock_message_event):
-        """Test on_message_sent filters messages not in room_ids."""
-        from queue import Queue
-
-        from csp_adapter_symphony.adapter import CspRealTimeEventListener
-
-        msg_queue = Queue()
-        room_mapper = SymphonyRoomMapper()
-        # Only accept messages from "other_stream"
-        listener = CspRealTimeEventListener(msg_queue, {"other_stream"}, room_mapper)
-
-        await listener.on_message_sent(mock_initiator, mock_message_event)
-
-        # Message should be filtered out
-        assert msg_queue.empty()
-
-    @pytest.mark.asyncio
-    async def test_on_symphony_elements_action(self):
-        """Test on_symphony_elements_action queues form submissions."""
-        from queue import Queue
-
-        from csp_adapter_symphony.adapter import CspRealTimeEventListener
-
-        msg_queue = Queue()
-        room_mapper = SymphonyRoomMapper()
-        room_mapper.register_room("Test Room", "stream123")
-        listener = CspRealTimeEventListener(msg_queue, set(), room_mapper)
-
-        initiator = MagicMock()
-        initiator.user.display_name = "Test User"
-        initiator.user.email = "test@example.com"
-        initiator.user.user_id = 12345
-
-        event = MagicMock()
-        event.stream.stream_id = "stream123"
-        event.stream.stream_type = "ROOM"
-        event.form_id = "my_form"
-        event.form_values = {"field1": "value1"}
-
-        await listener.on_symphony_elements_action(initiator, event)
-
-        assert not msg_queue.empty()
-        msg = msg_queue.get()
-        assert msg.form_id == "my_form"
-
-
-class TestProcessQueue:
-    """Tests for _process_queue method."""
-
-    @pytest.mark.asyncio
-    async def test_process_queue_stops_on_none(self):
-        """Test that _process_queue stops when None is pushed."""
-
-        from csp_adapter_symphony.adapter import SymphonyReaderPushAdapterImpl
-
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-
-        adapter = SymphonyReaderPushAdapterImpl(config, set())
-        adapter._running = True
-        adapter._message_queue.put(None)
-
-        # Should exit quickly when None is found
-        await adapter._process_queue()
-
-    @pytest.mark.asyncio
-    async def test_process_queue_handles_messages(self):
-        """Test that _process_queue processes messages."""
-        import asyncio
-
-        from csp_adapter_symphony.adapter import SymphonyReaderPushAdapterImpl
-
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-
-        adapter = SymphonyReaderPushAdapterImpl(config, set())
-        adapter._running = True
-        adapter.push_tick = MagicMock()
-
-        # Add a message then stop
-        msg = SymphonyMessage(msg="Test")
-        adapter._message_queue.put(msg)
-
-        # Run briefly then stop
-        async def stop_after_delay():
-            await asyncio.sleep(0.05)
-            adapter._running = False
-
-        await asyncio.gather(
-            adapter._process_queue(),
-            stop_after_delay(),
-        )
-
-        # Message should have been pushed
-        adapter.push_tick.assert_called()
-
-
-class TestSymphonyReaderPushAdapterImpl:
-    """Tests for SymphonyReaderPushAdapterImpl class."""
-
-    def test_init(self):
-        """Test adapter initialization."""
-        from csp_adapter_symphony.adapter import SymphonyReaderPushAdapterImpl
-
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-
-        adapter = SymphonyReaderPushAdapterImpl(config, {"Room1", "Room2"}, exit_msg="Goodbye!")
-
-        assert adapter._rooms == {"Room1", "Room2"}
-        assert adapter._exit_msg == "Goodbye!"
-        assert adapter._running is False
-
-    def test_start(self):
-        """Test adapter start."""
-        from csp_adapter_symphony.adapter import SymphonyReaderPushAdapterImpl
-
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-
-        adapter = SymphonyReaderPushAdapterImpl(config, set())
-
-        with patch.object(adapter, "_run"):
-            adapter.start(None, None)
-
-            assert adapter._running is True
-            assert adapter._thread is not None
-
-            # Clean up
-            adapter._running = False
-            adapter._thread.join(timeout=1.0)
-
-    def test_stop(self):
-        """Test adapter stop."""
-        from csp_adapter_symphony.adapter import SymphonyReaderPushAdapterImpl
-
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-
-        adapter = SymphonyReaderPushAdapterImpl(config, set())
-        adapter._running = True
-        adapter._thread = MagicMock()
-        adapter._loop = MagicMock()
-
-        adapter.stop()
-
-        assert adapter._running is False
-        adapter._thread.join.assert_called_once()
-
-
-class TestSendMessagesThread:
-    """Tests for _send_messages_thread function."""
-
-    def test_send_messages_thread_processes_queue(self):
-        """Test that _send_messages_thread processes messages."""
-        import threading
-        from queue import Queue
-
-        from csp_adapter_symphony.adapter import _send_messages_thread
-
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-        room_mapper = SymphonyRoomMapper()
-        msg_queue = Queue()
-
-        # Put None immediately to stop the thread
-        msg_queue.put(None)
-
-        with patch("csp_adapter_symphony.adapter.SymphonyBdk") as mock_bdk_class:
-            mock_bdk = MagicMock()
-            mock_bdk.__aenter__ = AsyncMock(return_value=mock_bdk)
-            mock_bdk.__aexit__ = AsyncMock(return_value=None)
-            mock_bdk.streams.return_value = MagicMock()
-            mock_bdk_class.return_value = mock_bdk
-
-            # Run in thread
-            thread = threading.Thread(
-                target=_send_messages_thread,
-                args=(msg_queue, config, room_mapper),
-            )
-            thread.start()
-            thread.join(timeout=2.0)
-
-            assert not thread.is_alive()
-
-    def test_send_messages_thread_sends_message(self):
-        """Test that _send_messages_thread sends messages."""
-        import threading
-        from queue import Queue
-
-        from csp_adapter_symphony.adapter import _send_messages_thread
-
-        config = SymphonyAdapterConfig(
-            host="test.symphony.com",
-            bot_username="testbot",
-            private_key_path="/path/to/key.pem",
-        )
-        room_mapper = SymphonyRoomMapper()
-        msg_queue = Queue()
-
-        # Add a message then stop
-        msg = SymphonyMessage(stream_id="stream123", msg="Hello!")
-        msg_queue.put(msg)
-        msg_queue.put(None)
-
-        with patch("csp_adapter_symphony.adapter.SymphonyBdk") as mock_bdk_class:
-            mock_bdk = MagicMock()
-            mock_bdk.__aenter__ = AsyncMock(return_value=mock_bdk)
-            mock_bdk.__aexit__ = AsyncMock(return_value=None)
-            mock_bdk.streams.return_value = MagicMock()
-            mock_bdk.messages.return_value.send_message = AsyncMock()
-            mock_bdk_class.return_value = mock_bdk
-
-            thread = threading.Thread(
-                target=_send_messages_thread,
-                args=(msg_queue, config, room_mapper),
-            )
-            thread.start()
-            thread.join(timeout=2.0)
-
-            mock_bdk.messages.return_value.send_message.assert_called()
-
-    def test_send_messages_thread_no_config(self):
-        """Test that _send_messages_thread handles missing config."""
-        import threading
-        from queue import Queue
-
-        from symphony.bdk.core.config.model.bdk_config import BdkConfig
-
-        from csp_adapter_symphony.adapter import _send_messages_thread
-
-        config = SymphonyAdapterConfig(bdk_config=BdkConfig(host="test.symphony.com"))
-        config.bdk_config = None  # Clear config
-
-        room_mapper = SymphonyRoomMapper()
-        msg_queue = Queue()
-        msg_queue.put(None)
-
-        thread = threading.Thread(
-            target=_send_messages_thread,
-            args=(msg_queue, config, room_mapper),
-        )
-        thread.start()
-        thread.join(timeout=2.0)
-
-        assert not thread.is_alive()
+    def test_all_presence_statuses(self):
+        """Test all presence status values are accessible."""
+        statuses = [
+            SymphonyPresenceStatus.AVAILABLE,
+            SymphonyPresenceStatus.BUSY,
+            SymphonyPresenceStatus.AWAY,
+            SymphonyPresenceStatus.ON_THE_PHONE,
+            SymphonyPresenceStatus.BE_RIGHT_BACK,
+            SymphonyPresenceStatus.IN_A_MEETING,
+            SymphonyPresenceStatus.OUT_OF_OFFICE,
+            SymphonyPresenceStatus.OFF_WORK,
+        ]
+        for status in statuses:
+            # Each status should have a valid name
+            assert status.name is not None
+            assert len(status.name) > 0

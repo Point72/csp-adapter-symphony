@@ -1,346 +1,430 @@
 # Examples
 
-The following examples demonstrate how to use the Symphony adapter with CSP.
+The following examples demonstrate how to use the Symphony CSP adapter with chatom.
 
-## Basic Hello Bot
+## Basic Echo Bot
 
-A simple bot that replies "Hello!" when someone says hello:
+A simple bot that echoes messages containing "hello":
 
 ```python
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import csp
 from csp import ts
 
-from csp_adapter_symphony import (
-    SymphonyAdapter,
-    SymphonyAdapterConfig,
-    SymphonyMessage,
-)
+from chatom.symphony import SymphonyConfig
+from csp_adapter_symphony import SymphonyAdapter, SymphonyMessage
 
-# Load configuration from ~/.symphony/config.yaml
-config = SymphonyAdapterConfig.from_symphony_dir("config.yaml")
+
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/private-key.pem",
+)
 
 
 @csp.node
-def reply_to_hello(msg: ts[SymphonyMessage]) -> ts[SymphonyMessage]:
+def echo_hello(messages: ts[[SymphonyMessage]]) -> ts[SymphonyMessage]:
     """Reply when someone says hello."""
-    if "hello" in msg.msg.lower():
-        return msg.reply(f"Hello {msg.mention()}!")
+    if csp.ticked(messages):
+        for msg in messages:
+            if "hello" in msg.content.lower():
+                return SymphonyMessage(
+                    stream_id=msg.stream_id,
+                    content=f"Hello back, {msg.author_id}!",
+                )
 
 
-def graph():
+@csp.graph
+def my_bot():
     adapter = SymphonyAdapter(config)
 
     # Subscribe to all messages
-    messages = csp.unroll(adapter.subscribe())
+    messages = adapter.subscribe()
 
-    # Log incoming messages
-    csp.print("Received", messages)
+    # Generate responses
+    responses = echo_hello(messages)
 
-    # Generate and publish responses
-    responses = reply_to_hello(messages)
+    # Publish responses
     adapter.publish(responses)
 
 
 if __name__ == "__main__":
-    csp.run(graph, realtime=True, endtime=timedelta(hours=8))
+    csp.run(
+        my_bot,
+        starttime=datetime.now(),
+        endtime=timedelta(hours=8),
+        realtime=True,
+    )
 ```
 
-## Direct Message Handler
+## Filtering by Room
 
-Handle direct messages differently from room messages:
+Subscribe to messages from specific rooms:
 
 ```python
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import csp
-from csp import ts
 
-from csp_adapter_symphony import (
-    SymphonyAdapter,
-    SymphonyAdapterConfig,
-    SymphonyMessage,
+from chatom.symphony import SymphonyConfig
+from csp_adapter_symphony import SymphonyAdapter
+
+
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/key.pem",
 )
 
-config = SymphonyAdapterConfig.from_symphony_dir("config.yaml")
 
-
-@csp.node
-def handle_message(msg: ts[SymphonyMessage]) -> ts[SymphonyMessage]:
-    """Handle DMs and room messages differently."""
-    if msg.is_direct_message():
-        # Respond to DMs
-        return msg.reply("Thanks for the DM! How can I help?")
-    elif "help" in msg.msg.lower():
-        # Send help privately
-        return msg.direct_reply("Here's some help information...")
-
-
-def graph():
+@csp.graph
+def my_bot():
     adapter = SymphonyAdapter(config)
-    messages = csp.unroll(adapter.subscribe())
-    responses = handle_message(messages)
-    adapter.publish(responses)
+
+    # Subscribe to specific rooms by name or stream ID
+    messages = adapter.subscribe(rooms={"Bot Room", "Support"})
+    # Or by stream ID
+    messages = adapter.subscribe(rooms={"streamId123", "streamId456"})
+
+    # Process messages...
+    csp.print("Filtered messages", messages)
 
 
 if __name__ == "__main__":
-    csp.run(graph, realtime=True, endtime=timedelta(hours=8))
+    csp.run(my_bot, starttime=datetime.now(), endtime=timedelta(hours=8), realtime=True)
 ```
 
-## Sending to Specific Users
+## Using Mentions
 
-Send direct messages to specific users:
+Check for mentions and create mentions in responses:
 
 ```python
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import csp
 from csp import ts
 
+from chatom.symphony import SymphonyConfig
 from csp_adapter_symphony import (
     SymphonyAdapter,
-    SymphonyAdapterConfig,
     SymphonyMessage,
+    mention_user_by_uid,
+    format_hashtag,
 )
 
-config = SymphonyAdapterConfig.from_symphony_dir("config.yaml")
+
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/key.pem",
+)
+
+BOT_USER_ID = "12345"
 
 
 @csp.node
-def notify_admins(msg: ts[SymphonyMessage]) -> ts[[SymphonyMessage]]:
-    """Notify admin users when certain keywords are detected."""
-    ADMIN_IDS = ["12345", "67890"]
+def handle_mentions(messages: ts[[SymphonyMessage]]) -> ts[SymphonyMessage]:
+    """Respond when the bot is mentioned."""
+    if csp.ticked(messages):
+        for msg in messages:
+            if msg.mentions_user(BOT_USER_ID):
+                # Mention the user back
+                response_content = (
+                    f"Hi {mention_user_by_uid(int(msg.author_id))}! "
+                    f"You mentioned me. Check out {format_hashtag('help')} for commands."
+                )
+                return SymphonyMessage(
+                    stream_id=msg.stream_id,
+                    content=response_content,
+                )
 
-    if "urgent" in msg.msg.lower():
-        # Send DM to each admin
-        return [
-            SymphonyMessage.to_user(admin_id, f"Urgent message from {msg.user}: {msg.msg}")
-            for admin_id in ADMIN_IDS
-        ]
-    return []
 
-
-def graph():
+@csp.graph
+def my_bot():
     adapter = SymphonyAdapter(config)
-    messages = csp.unroll(adapter.subscribe())
-    notifications = csp.unroll(notify_admins(messages))
-    adapter.publish(notifications)
-
-
-if __name__ == "__main__":
-    csp.run(graph, realtime=True, endtime=timedelta(hours=8))
-```
-
-## Working with Mentions
-
-Handle messages that mention the bot:
-
-```python
-from datetime import timedelta
-
-import csp
-from csp import ts
-
-from csp_adapter_symphony import (
-    SymphonyAdapter,
-    SymphonyAdapterConfig,
-    SymphonyMessage,
-    mention_user,
-)
-
-config = SymphonyAdapterConfig.from_symphony_dir("config.yaml")
-
-BOT_USER_ID = "your-bot-user-id"
-
-
-@csp.node
-def handle_mentions(msg: ts[SymphonyMessage]) -> ts[SymphonyMessage]:
-    """Only respond when the bot is mentioned."""
-    if msg.mentions_user(BOT_USER_ID):
-        # Bot was mentioned
-        mentioned_users = msg.get_mentioned_users()
-        other_mentions = [u for u in mentioned_users if u != BOT_USER_ID]
-
-        if other_mentions:
-            # Someone else was also mentioned
-            mentions_text = " ".join(mention_user(u) for u in other_mentions)
-            return msg.reply(f"I see you mentioned {mentions_text} too!")
-        else:
-            return msg.reply("You called? How can I help?")
-
-
-def graph():
-    adapter = SymphonyAdapter(config)
-    messages = csp.unroll(adapter.subscribe())
+    messages = adapter.subscribe()
     responses = handle_mentions(messages)
     adapter.publish(responses)
 
 
 if __name__ == "__main__":
-    csp.run(graph, realtime=True, endtime=timedelta(hours=8))
+    csp.run(my_bot, starttime=datetime.now(), endtime=timedelta(hours=8), realtime=True)
 ```
 
-## Form Handling (Symphony Elements)
+## Presence Management
 
-Handle form submissions:
+Set the bot's presence status:
 
 ```python
-from datetime import timedelta
+from datetime import datetime, timedelta
+
+import csp
+
+from chatom.symphony import SymphonyConfig
+from csp_adapter_symphony import SymphonyAdapter, SymphonyPresenceStatus
+
+
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/key.pem",
+)
+
+
+@csp.graph
+def my_bot():
+    adapter = SymphonyAdapter(config)
+
+    # Set presence to available at start
+    presence = csp.const(SymphonyPresenceStatus.AVAILABLE)
+    adapter.publish_presence(presence)
+
+    # Subscribe and process messages
+    messages = adapter.subscribe()
+    csp.print("Messages", messages)
+
+
+if __name__ == "__main__":
+    csp.run(my_bot, starttime=datetime.now(), endtime=timedelta(hours=8), realtime=True)
+```
+
+## Processing Individual Messages
+
+Unroll message batches to process individually:
+
+```python
+from datetime import datetime, timedelta
 
 import csp
 from csp import ts
 
-from csp_adapter_symphony import (
-    SymphonyAdapter,
-    SymphonyAdapterConfig,
-    SymphonyMessage,
-)
+from chatom.symphony import SymphonyConfig
+from csp_adapter_symphony import SymphonyAdapter, SymphonyMessage
 
-config = SymphonyAdapterConfig.from_symphony_dir("config.yaml")
+
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/key.pem",
+)
 
 
 @csp.node
-def handle_forms(msg: ts[SymphonyMessage]) -> ts[SymphonyMessage]:
-    """Handle form submissions."""
-    if msg.is_form_submission():
-        if msg.form_id == "feedback_form":
-            rating = msg.get_form_value("rating", "not provided")
-            comments = msg.get_form_value("comments", "none")
-            return msg.reply(f"Thanks for your feedback! Rating: {rating}")
-        elif msg.form_id == "request_form":
-            request_type = msg.get_form_value("type")
-            return msg.reply(f"Processing your {request_type} request...")
+def process_single_message(msg: ts[SymphonyMessage]) -> ts[SymphonyMessage]:
+    """Process a single message."""
+    if csp.ticked(msg):
+        # Respond to commands
+        if msg.content.startswith("!ping"):
+            return SymphonyMessage(
+                stream_id=msg.stream_id,
+                content="Pong!",
+            )
 
 
-def graph():
+@csp.graph
+def my_bot():
     adapter = SymphonyAdapter(config)
-    messages = csp.unroll(adapter.subscribe())
-    responses = handle_forms(messages)
+
+    # Get message batches
+    message_batches = adapter.subscribe()
+
+    # Unroll to individual messages
+    individual_messages = csp.unroll(message_batches)
+
+    # Process each message
+    responses = process_single_message(individual_messages)
+
+    # Publish responses
     adapter.publish(responses)
 
 
 if __name__ == "__main__":
-    csp.run(graph, realtime=True, endtime=timedelta(hours=8))
+    csp.run(my_bot, starttime=datetime.now(), endtime=timedelta(hours=8), realtime=True)
 ```
 
-## Setting Bot Presence
+## Using SymphonyAdapterConfig
 
-Update the bot's presence status:
+Use extended config for adapter-specific options:
 
 ```python
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import csp
-from csp import ts
 
-from csp_adapter_symphony import (
-    Presence,
-    SymphonyAdapter,
-    SymphonyAdapterConfig,
+from csp_adapter_symphony import SymphonyAdapter, SymphonyAdapterConfig
+
+
+# Extended config with adapter options
+config = SymphonyAdapterConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/key.pem",
+    # Adapter-specific options
+    error_room="Bot Errors",  # Send errors to this room
+    inform_client=True,       # Notify users of send failures
+    max_attempts=5,           # Retry attempts
+    ssl_verify=True,          # Verify SSL certificates
 )
 
-config = SymphonyAdapterConfig.from_symphony_dir("config.yaml")
 
-
-def graph():
+@csp.graph
+def my_bot():
     adapter = SymphonyAdapter(config)
-
-    # Set initial presence
-    initial_presence = csp.const(Presence.AVAILABLE)
-    adapter.publish_presence(initial_presence)
-
-    # Could also change presence based on conditions
-    # adapter.publish_presence(presence_updates)
+    messages = adapter.subscribe()
+    csp.print("Messages", messages)
 
 
 if __name__ == "__main__":
-    csp.run(graph, realtime=True, endtime=timedelta(hours=8))
+    csp.run(my_bot, starttime=datetime.now(), endtime=timedelta(hours=8), realtime=True)
 ```
 
-## Subscribing to Specific Rooms
+## Certificate-Based Authentication
 
-Listen to only specific rooms:
+Use certificate authentication instead of RSA key:
 
 ```python
-from datetime import timedelta
+from chatom.symphony import SymphonyConfig
+from csp_adapter_symphony import SymphonyAdapter
 
-import csp
-from csp import ts
 
-from csp_adapter_symphony import (
-    SymphonyAdapter,
-    SymphonyAdapterConfig,
-    SymphonyMessage,
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot@domain.com",
+    bot_certificate_path="/path/to/combined-cert-and-key.pem",
 )
 
-config = SymphonyAdapterConfig.from_symphony_dir("config.yaml")
+adapter = SymphonyAdapter(config)
+```
+
+## Accessing the Backend Directly
+
+Access chatom's SymphonyBackend for additional operations:
+
+```python
+from datetime import datetime, timedelta
+
+import csp
+
+from chatom.symphony import SymphonyConfig
+from csp_adapter_symphony import SymphonyAdapter
 
 
-@csp.node
-def echo(msg: ts[SymphonyMessage]) -> ts[SymphonyMessage]:
-    """Echo messages back."""
-    return msg.reply(f"Echo: {msg.msg}")
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/key.pem",
+)
 
 
-def graph():
+@csp.graph
+def my_bot():
     adapter = SymphonyAdapter(config)
 
-    # Only subscribe to specific rooms
-    rooms_to_monitor = {"General", "Support", "Engineering"}
-    messages = csp.unroll(adapter.subscribe(rooms=rooms_to_monitor))
+    # Access the underlying backend
+    backend = adapter.symphony_backend
 
-    # Exit message when shutting down
-    # adapter.subscribe(rooms=rooms_to_monitor, exit_msg="Bot is shutting down...")
+    # Use backend methods (sync wrapper)
+    # user = backend.sync.fetch_user(email="user@example.com")
 
-    responses = echo(messages)
+    messages = adapter.subscribe()
+    csp.print("Messages", messages)
+
+
+if __name__ == "__main__":
+    csp.run(my_bot, starttime=datetime.now(), endtime=timedelta(hours=8), realtime=True)
+```
+
+## Using the Generic chatom CSP Layer
+
+You can also use chatom's generic CSP layer directly:
+
+```python
+from datetime import datetime, timedelta
+
+import csp
+
+from chatom.csp import BackendAdapter
+from chatom.symphony import SymphonyBackend, SymphonyConfig
+
+
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/key.pem",
+)
+
+# Create backend directly
+backend = SymphonyBackend(config=config)
+
+# Use generic BackendAdapter
+adapter = BackendAdapter(backend)
+
+
+@csp.graph
+def my_bot():
+    messages = adapter.subscribe()
+    csp.print("Messages", messages)
     adapter.publish(responses)
 
 
 if __name__ == "__main__":
-    csp.run(graph, realtime=True, endtime=timedelta(hours=8))
+    csp.run(my_bot, starttime=datetime.now(), endtime=timedelta(hours=8), realtime=True)
 ```
 
-## Error Handling with Error Room
+## Combining Multiple Streams
 
-Configure error notifications to a dedicated room:
+Process messages from different sources:
 
 ```python
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import csp
+from csp import ts
 
-from csp_adapter_symphony import (
-    SymphonyAdapter,
-    SymphonyAdapterConfig,
-    SymphonyMessage,
+from chatom.symphony import SymphonyConfig
+from csp_adapter_symphony import SymphonyAdapter, SymphonyMessage
+
+
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/key.pem",
 )
 
-# Configure with error room
-config = SymphonyAdapterConfig.from_symphony_dir(
-    "config.yaml",
-    error_room="Bot Error Notifications",
-    inform_client=True,  # Notify users when messages fail
-)
+
+@csp.node
+def combine_and_process(
+    room_messages: ts[[SymphonyMessage]],
+) -> ts[SymphonyMessage]:
+    """Process all incoming messages."""
+    if csp.ticked(room_messages):
+        for msg in room_messages:
+            # Log all messages
+            print(f"[{msg.stream_id}] {msg.author_id}: {msg.content}")
+
+            # Respond to specific commands
+            if msg.content.startswith("!help"):
+                return SymphonyMessage(
+                    stream_id=msg.stream_id,
+                    content="Available commands: !help, !ping, !status",
+                )
 
 
-def graph():
+@csp.graph
+def my_bot():
     adapter = SymphonyAdapter(config)
-    messages = csp.unroll(adapter.subscribe())
 
-    # If message sending fails, errors go to "Bot Error Notifications" room
-    adapter.publish(messages)
+    # Subscribe to all messages
+    messages = adapter.subscribe()
+
+    # Process
+    responses = combine_and_process(messages)
+
+    # Publish
+    adapter.publish(responses)
 
 
 if __name__ == "__main__":
-    csp.run(graph, realtime=True, endtime=timedelta(hours=8))
+    csp.run(my_bot, starttime=datetime.now(), endtime=timedelta(hours=8), realtime=True)
 ```
-
-## Using with csp-bot Framework
-
-For more complex chatbot functionality, see the [`csp-bot`](https://github.com/Point72/csp-bot) framework which provides:
-
-- Command routing and parsing
-- Cross-platform support (Symphony, Slack, Discord)
-- Middleware and plugins
-- State management
