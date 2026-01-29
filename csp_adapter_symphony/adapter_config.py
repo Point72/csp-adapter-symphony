@@ -1,438 +1,316 @@
-"""Configuration module for Symphony adapter using symphony-bdk-python.
-
-This module provides configuration classes for connecting to Symphony
-using the official BDK (Bot Development Kit).
-"""
-
+import http.client
+import json
 import logging
+import ssl
 import threading
-from pathlib import Path
-from typing import Any, Dict, Optional
+from datetime import timedelta
+from functools import cached_property
+from tempfile import NamedTemporaryFile
+from typing import Callable, Dict, List, Optional, Union
+from urllib.parse import urljoin
 
-from pydantic import AliasChoices, BaseModel, Field, model_validator
-
-# Import BDK types - handle case when not installed
-try:
-    from symphony.bdk.core.config.loader import BdkConfigLoader
-    from symphony.bdk.core.config.model.bdk_config import BdkConfig
-
-    _BDK_AVAILABLE = True
-except ImportError:
-    _BDK_AVAILABLE = False
-    BdkConfigLoader = None
-    BdkConfig = None
+import requests
+import tenacity
+from pydantic import AliasChoices, BaseModel, Field, FilePath, computed_field, field_validator, model_validator
 
 __all__ = ("SymphonyAdapterConfig", "SymphonyRoomMapper")
 
-log = logging.getLogger(__name__)
-
-
-def _check_bdk_available():
-    """Check if symphony-bdk-python is available."""
-    if not _BDK_AVAILABLE:
-        raise ImportError("symphony-bdk-python is required but not installed. Install it with: pip install symphony-bdk-python")
+log = logging.getLogger(__file__)
 
 
 class SymphonyAdapterConfig(BaseModel):
-    """A config class that holds the required information to interact with Symphony using the BDK.
+    """A config class that holds the required information to interact with Symphony. Includes helper methods to make REST API calls to Symphony."""
 
-    This configuration can be created either from:
-    1. A BDK config file path (YAML or JSON)
-    2. A BdkConfig object directly
-    3. Individual configuration parameters (for backwards compatibility)
-
-    The recommended approach is to use BDK config files for consistency with
-    the Symphony BDK ecosystem.
-    """
-
-    model_config = {"arbitrary_types_allowed": True}
-
-    # BDK configuration - preferred approach
-    bdk_config: Optional[BdkConfig] = Field(
-        None,
-        description="A BdkConfig object from symphony-bdk-python. If provided, other connection parameters are ignored.",
+    symphony_host: str = Field("", description="Base URL for Symphony, like `company.symphony.com`")
+    auth_host: str = Field(description="Authentication host, like `company-api.symphony.com`")
+    session_auth_path: str = Field("/sessionauth/v1/authenticate", description="Path to authenticate session, like `/sessionauth/v1/authenticate`")
+    key_auth_path: str = Field("/keyauth/v1/authenticate", description="Path to authenticate key, like `/keyauth/v1/authenticate`")
+    message_create_url: str = Field(
+        "", description="Format-string path to create a message, like `https://SYMPHONY_HOST/agent/v4/stream/{sid}/message/create`"
     )
-    bdk_config_path: Optional[str] = Field(
-        None,
-        description="Path to a BDK config file (YAML or JSON). If provided, bdk_config will be loaded from this file.",
+    presence_url: str = Field("", description="String path to set presence information, like `https://SYMPHONY_HOST/pod/v2/user/presence`")
+    datafeed_create_url: str = Field("", description="String path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds`")
+    datafeed_delete_url: str = Field(
+        "", description="Format-string path to delete datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds/{datafeed_id}`"
     )
-
-    # Legacy configuration options (for backwards compatibility)
-    host: Optional[str] = Field(
-        None,
-        description="Base URL for Symphony, like `company.symphony.com`. Used when bdk_config is not provided.",
-        validation_alias=AliasChoices("host", "symphony_host"),
+    datafeed_read_url: str = Field(
+        "", description="Format-string path to listen to datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds/{datafeed_id}/read`"
+    )
+    room_search_url: str = Field("", description="Format-string path to search rooms, like `https://SYMPHONY_HOST/pod/v3/room/search`")
+    room_info_url: str = Field("", description="Format-string path to get room info, like `https://SYMPHONY_HOST/pod/v3/room/{room_id}/info`")
+    im_create_url: str = Field("", description="Format-string path to create instant message channel, like `https://SYMPHONY_HOST/pod/v1/im/create`")
+    room_members_url: Optional[str] = Field(
+        None, description="Format-string path to get room members in a room, like `https://SYMPHONY_HOST/pod/v2/room/{{room_id}}/membership/list`"
     )
 
-    # Separate endpoint hosts (if different from main host)
-    pod_host: Optional[str] = Field(
-        None,
-        description="Host for Pod API (if different from main host). Example: pod.symphony.com",
-    )
-    agent_host: Optional[str] = Field(
-        None,
-        description="Host for Agent API (if different from main host). Example: agent.symphony.com",
-    )
-    session_auth_host: Optional[str] = Field(
-        None,
-        description="Host for Session Auth API (if different from main host). Example: session.symphony.com",
-    )
-    key_manager_host: Optional[str] = Field(
-        None,
-        description="Host for Key Manager API (if different from main host). Example: km.symphony.com",
-    )
+    cert: Union[str, FilePath] = Field(description="Pem format string of client certificate", validation_alias=AliasChoices("cert", "cert_string"))
+    key: Union[str, FilePath] = Field(description="Pem format string of client private key", validation_alias=AliasChoices("key", "key_string"))
 
-    private_key_path: Optional[str] = Field(
-        None,
-        description="Path to the bot's RSA private key file.",
-        validation_alias=AliasChoices("private_key_path", "key"),
-    )
-    private_key_content: Optional[str] = Field(
-        None,
-        description="Content of the bot's RSA private key (PEM format).",
-    )
-    certificate_path: Optional[str] = Field(
-        None,
-        description="Path to the bot's certificate file (.pem or .crt) for certificate-based authentication.",
-        validation_alias=AliasChoices("certificate_path", "cert", "cert_path"),
-    )
-    certificate_content: Optional[str] = Field(
-        None,
-        description="Content of the bot's certificate (PEM format).",
-    )
-    bot_username: Optional[str] = Field(
-        None,
-        description="The bot's username as configured in Symphony admin console.",
-    )
-
-    # Common options
     error_room: Optional[str] = Field(
         None,
-        description="A room to direct error messages to, if a message fails to be sent over symphony.",
+        description="A room to direct error messages to, if a message fails to be sent over symphony, or if the SymphonyReaderPushAdapter crashes",
     )
-    inform_client: bool = Field(
-        False,
-        description="Whether to inform the intended recipient of a failed message that the message failed.",
+    inform_client: bool = Field(False, description="Whether to inform the intended recipient of a failed message that the message failed")
+    max_attempts: int = Field(10, description="Max attempts for datafeed and message post requests before raising exception. If -1, no maximum")
+    initial_interval_ms: int = Field(500, description="Initial interval to wait between attempts, in milliseconds")
+    multiplier: float = Field(2.0, description="Multiplier between attempt delays for exponential backoff")
+    max_interval_ms: int = Field(300000, description="Maximum delay between retry attempts, in milliseconds")
+    datafeed_id: str = Field(
+        "", description="The ID of the datafeed to be used by the datafeed reader. If left empty, a datafeed ID will be automatically assigned"
     )
-    max_attempts: int = Field(
-        10,
-        description="Max attempts for datafeed and message post requests before raising exception. If -1, no maximum.",
-    )
-    initial_interval_ms: int = Field(
-        500,
-        description="Initial interval to wait between attempts, in milliseconds.",
-    )
-    multiplier: float = Field(
-        2.0,
-        description="Multiplier between attempt delays for exponential backoff.",
-    )
-    max_interval_ms: int = Field(
-        300000,
-        description="Maximum delay between retry attempts, in milliseconds.",
-    )
-    datafeed_version: str = Field(
-        "v2",
-        description="Version of datafeed to use ('v1' or 'v2'). V2 is recommended.",
-    )
-    ssl_trust_store_path: Optional[str] = Field(
-        None,
-        description="Path to a custom CA certificate bundle file (PEM format) for SSL verification. Use this for self-signed certificates.",
-    )
-    ssl_verify: bool = Field(
-        True,
-        description="Whether to verify SSL certificates. Set to False to disable SSL verification (not recommended for production).",
-    )
+
+    _default_endpoints = {
+        "message_create_url": "/agent/v4/stream/{sid}/message/create",
+        "presence_url": "/pod/v2/user/presence",
+        "datafeed_create_url": "/agent/v5/datafeeds",
+        "datafeed_delete_url": "/agent/v5/datafeeds/{datafeed_id}",
+        "datafeed_read_url": "/agent/v5/datafeeds/{datafeed_id}/read",
+        "room_search_url": "/pod/v3/room/search",
+        "room_info_url": "/pod/v3/room/{room_id}/info",
+        "im_create_url": "/pod/v1/im/create",
+    }
 
     @model_validator(mode="after")
-    def validate_and_build_config(self) -> "SymphonyAdapterConfig":
-        """Validate configuration and build BdkConfig if not provided."""
-        _check_bdk_available()
+    def validate_and_set_urls(self) -> "SymphonyAdapterConfig":
+        symphony_host = self.symphony_host
 
-        # If bdk_config is already set, we're done
-        if self.bdk_config is not None:
-            return self
+        missing_urls = [field_name for field_name in self._default_endpoints if not getattr(self, field_name)]
 
-        # Try to load from config file path
-        if self.bdk_config_path:
-            self.bdk_config = BdkConfigLoader.load_from_file(self.bdk_config_path)
-            return self
+        if missing_urls and not symphony_host:
+            raise ValueError(f"symphony_host must be set if the following urls are not provided: {', '.join(missing_urls)}")
 
-        # Build from individual parameters
-        if self.host and self.bot_username:
-            config_dict: Dict[str, Any] = {
-                "host": self.host,
-                "bot": {
-                    "username": self.bot_username,
-                },
-                "datafeed": {
-                    "version": self.datafeed_version,
-                    "retry": {
-                        "maxAttempts": self.max_attempts if self.max_attempts != -1 else 0,
-                        "initialIntervalMillis": self.initial_interval_ms,
-                        "multiplier": self.multiplier,
-                        "maxIntervalMillis": self.max_interval_ms,
-                    },
-                },
-                "retry": {
-                    "maxAttempts": self.max_attempts if self.max_attempts != -1 else 0,
-                    "initialIntervalMillis": self.initial_interval_ms,
-                    "multiplier": self.multiplier,
-                    "maxIntervalMillis": self.max_interval_ms,
-                },
-            }
+        if not symphony_host.startswith(("http://", "https://")):
+            symphony_host = f"https://{symphony_host}"
 
-            # Add separate endpoint hosts if specified
-            if self.pod_host:
-                config_dict["pod"] = {"host": self.pod_host}
-            if self.agent_host:
-                config_dict["agent"] = {"host": self.agent_host}
-            if self.session_auth_host:
-                config_dict["sessionAuth"] = {"host": self.session_auth_host}
-            if self.key_manager_host:
-                config_dict["keyManager"] = {"host": self.key_manager_host}
+        for field_name in missing_urls:
+            setattr(self, field_name, urljoin(symphony_host, self._default_endpoints[field_name]))
 
-            # Add private key configuration
-            if self.private_key_path:
-                config_dict["bot"]["privateKey"] = {"path": self.private_key_path}
-            elif self.private_key_content:
-                config_dict["bot"]["privateKey"] = {"content": self.private_key_content}
+        return self
 
-            # Add certificate configuration for certificate-based auth
-            if self.certificate_path:
-                config_dict["bot"]["certificate"] = {"path": self.certificate_path}
-            elif self.certificate_content:
-                config_dict["bot"]["certificate"] = {"content": self.certificate_content}
+    @field_validator("cert")
+    def load_cert_if_file(cls, v):
+        if "BEGIN CERTIFICATE" in v:
+            return v
+        with open(v, "r") as fp:
+            return fp.read()
 
-            # Add SSL configuration
-            if self.ssl_trust_store_path:
-                config_dict["ssl"] = {"trustStore": {"path": self.ssl_trust_store_path}}
+    @field_validator("key")
+    def load_key_if_file(cls, v):
+        if "BEGIN PRIVATE KEY" in v:
+            return v
+        with open(v, "r") as fp:
+            return fp.read()
 
-            self.bdk_config = BdkConfig(**config_dict)
+    # The type hint ignore is due to mypy possibly throwing a
+    # 'Decorated property not supported' error
+    @computed_field  # type: ignore[misc]
+    @cached_property
+    def header(self) -> Dict[str, str]:
+        """Returns header from authentication. This performs a network request. The result gets cached for re-use"""
+        return _symphony_session(
+            auth_host=self.auth_host,
+            session_auth_path=self.session_auth_path,
+            key_auth_path=self.key_auth_path,
+            cert_string=self.cert,
+            key_string=self.key,
+        )
 
-            # Handle ssl_verify=False by patching the config after creation
-            if not self.ssl_verify:
-                log.warning("SSL verification is disabled. This is not recommended for production use.")
-                self._patch_ssl_verify()
+    def get_retry_decorator(self) -> Callable:
+        """Returns a tenacity retry decorator that can wrap arbitrary functions"""
+        exp_wait = tenacity.wait_exponential(
+            min=timedelta(milliseconds=self.initial_interval_ms), max=timedelta(milliseconds=self.max_interval_ms), multiplier=self.multiplier
+        )
+        stop = tenacity.stop_after_attempt(self.max_attempts) if self.max_attempts != -1 else tenacity.stop_never
+        return tenacity.retry(
+            reraise=True,
+            stop=stop,
+            wait=exp_wait,
+            retry=tenacity.retry_if_exception_type(requests.RequestException),
+            before_sleep=tenacity.before_sleep_log(log, logging.DEBUG),
+        )
 
-            return self
+    def get_room_id(self, room_name: str) -> Optional[str]:
+        """Given a room name, returns the corresponding room id, if it can be found. This performs a network request."""
+        return _get_room_id(room_name=room_name, room_search_url=self.room_search_url, header=self.header)
 
-        raise ValueError("Either bdk_config, bdk_config_path, or (host, bot_username, and private_key_path/private_key_content) must be provided.")
+    def get_user_ids_in_room(self, room_id: Optional[str] = None, room_name: Optional[str] = None) -> List[str]:
+        """Given a room id or room name, returns the user id's of the users in the room. Exactly one of 'room_id' or 'room_name' must be set."""
+        room_name_is_none = room_name is None
+        room_id_is_none = room_id is None
 
-    def _patch_ssl_verify(self):
-        """Patch the BDK to disable SSL verification.
+        if room_name_is_none and room_id_is_none:
+            raise ValueError("One of 'room_name' and 'room_id' must not be None")
 
-        This is a workaround since the BDK doesn't expose ssl_verify as a config option.
-        It patches the ApiClientFactory to set verify_ssl=False on all clients.
-        """
-        try:
-            from symphony.bdk.core.client.api_client_factory import ApiClientFactory
-            from symphony.bdk.gen.configuration import Configuration
+        elif not room_name_is_none and not room_id_is_none:
+            raise ValueError("At most one of 'room_name' and 'room_id' must be set.")
 
-            # Patch the Configuration class __init__ to set verify_ssl=False by default
-            original_config_init = Configuration.__init__
+        elif room_name_is_none and not room_id_is_none:
+            return _get_user_ids_in_room(room_id=room_id, room_members_url=self.room_members_url, header=self.header)
 
-            def patched_config_init(config_self, *args, **kwargs):
-                original_config_init(config_self, *args, **kwargs)
-                config_self.verify_ssl = False
+        # Last case, must get room_id from room_name
+        if (true_room_id := self.get_room_id(room_name)) is None:
+            return []
+        return _get_user_ids_in_room(room_id=true_room_id, room_members_url=self.room_members_url, header=self.header)
 
-            Configuration.__init__ = patched_config_init
-
-            # Also patch _get_client_config in case it's called
-            if hasattr(ApiClientFactory, "_get_client_config"):
-                original_get_client_config = ApiClientFactory._get_client_config
-
-                def patched_get_client_config(factory_self, context, server_config):
-                    config = original_get_client_config(factory_self, context, server_config)
-                    config.verify_ssl = False
-                    return config
-
-                ApiClientFactory._get_client_config = patched_get_client_config
-
-            log.debug("SSL verification has been disabled via monkey patch")
-        except ImportError as e:
-            log.warning(f"Could not patch SSL verification - BDK not available: {e}")
-
-    @classmethod
-    def from_bdk_config(cls, bdk_config: BdkConfig, **kwargs) -> "SymphonyAdapterConfig":
-        """Create a SymphonyAdapterConfig from an existing BdkConfig object.
-
-        Args:
-            bdk_config: A BdkConfig object from symphony-bdk-python.
-            **kwargs: Additional configuration options (error_room, inform_client, etc.)
-
-        Returns:
-            A configured SymphonyAdapterConfig instance.
-        """
-        return cls(bdk_config=bdk_config, **kwargs)
-
-    @classmethod
-    def from_file(cls, config_path: str, **kwargs) -> "SymphonyAdapterConfig":
-        """Create a SymphonyAdapterConfig from a BDK config file.
-
-        Args:
-            config_path: Path to a BDK config file (YAML or JSON).
-            **kwargs: Additional configuration options (error_room, inform_client, etc.)
-
-        Returns:
-            A configured SymphonyAdapterConfig instance.
-        """
-        return cls(bdk_config_path=config_path, **kwargs)
-
-    @classmethod
-    def from_symphony_dir(cls, relative_path: str = "config.yaml", **kwargs) -> "SymphonyAdapterConfig":
-        """Create a SymphonyAdapterConfig from a config file in ~/.symphony directory.
-
-        Args:
-            relative_path: Relative path from ~/.symphony to the config file.
-            **kwargs: Additional configuration options.
-
-        Returns:
-            A configured SymphonyAdapterConfig instance.
-        """
-        config_path = Path.home() / ".symphony" / relative_path
-        return cls.from_file(str(config_path), **kwargs)
+    def get_room_name(self, room_id: str) -> Optional[str]:
+        """Given room_id, returns the name of the room."""
+        return _get_room_name(room_id=room_id, room_info_url=self.room_info_url, header=self.header)
 
 
 class SymphonyRoomMapper:
-    """Thread-safe mapper for Symphony room names and IDs.
-
-    This class maintains a cache of room name to ID mappings and vice versa,
-    using the BDK's StreamService to resolve unknown rooms.
-    """
-
-    def __init__(self, stream_service=None):
-        """Initialize the room mapper.
-
-        Args:
-            stream_service: Optional StreamService from SymphonyBdk. If not provided,
-                           room resolution will not be available until set.
-        """
-        self._name_to_id: Dict[str, str] = {}
-        self._id_to_name: Dict[str, str] = {}
-        self._stream_service = stream_service
+    def __init__(self, room_search_url: str, room_info_url: str, header: Dict[str, str]):
+        self._name_to_id = {}
+        self._id_to_name = {}
+        self._room_search_url = room_search_url
+        self._room_info_url = room_info_url
+        self._header = header
         self._lock = threading.Lock()
 
-    def set_stream_service(self, stream_service):
-        """Set the stream service for room resolution."""
-        self._stream_service = stream_service
+    @staticmethod
+    def from_config(config: SymphonyAdapterConfig) -> "SymphonyRoomMapper":
+        return SymphonyRoomMapper(config.room_search_url, config.room_info_url, config.header)
 
-    def get_room_id(self, room_name: str) -> Optional[str]:
-        """Get the room ID for a given room name.
-
-        Args:
-            room_name: The display name of the room.
-
-        Returns:
-            The room's stream ID, or None if not found.
-        """
+    def get_room_id(self, room_name):
         with self._lock:
             if room_name in self._name_to_id:
                 return self._name_to_id[room_name]
+            else:
+                room_id = _get_room_id(room_name, self._room_search_url, self._header)
+                self._name_to_id[room_name] = room_id
+                self._id_to_name[room_id] = room_name
+                return room_id
 
-            # If it looks like a stream ID already, return it
-            if len(room_name) > 20 and " " not in room_name:
+    def get_room_name(self, room_id):
+        with self._lock:
+            if room_id in self._id_to_name:
+                return self._id_to_name[room_id]
+            else:
+                room_name = _get_room_name(room_id, self._room_info_url, self._header)
+                self._name_to_id[room_name] = room_id
+                self._id_to_name[room_id] = room_name
                 return room_name
 
-            return None
-
-    async def get_room_id_async(self, room_name: str) -> Optional[str]:
-        """Get the room ID for a given room name, using async BDK calls if needed.
-
-        Args:
-            room_name: The display name of the room.
-
-        Returns:
-            The room's stream ID, or None if not found.
-        """
-        # Check cache first
-        cached = self.get_room_id(room_name)
-        if cached:
-            return cached
-
-        # Try to resolve using stream service
-        if self._stream_service is None:
-            return None
-
-        try:
-            from symphony.bdk.gen.pod_model.v2_room_search_criteria import V2RoomSearchCriteria
-
-            results = await self._stream_service.search_rooms(V2RoomSearchCriteria(query=room_name), limit=10)
-            if results and results.rooms:
-                for room in results.rooms:
-                    room_attrs = room.room_attributes
-                    room_info = room.room_system_info
-                    if room_attrs and room_info and room_attrs.name == room_name:
-                        room_id = room_info.id
-                        with self._lock:
-                            self._name_to_id[room_name] = room_id
-                            self._id_to_name[room_id] = room_name
-                        return room_id
-        except Exception as e:
-            log.error(f"Error searching for room '{room_name}': {e}")
-
-        return None
-
-    def get_room_name(self, room_id: str) -> Optional[str]:
-        """Get the room name for a given room ID.
-
-        Args:
-            room_id: The room's stream ID.
-
-        Returns:
-            The room's display name, or None if not found.
-        """
+    def set_im_id(self, user, id):
         with self._lock:
-            return self._id_to_name.get(room_id)
+            self._id_to_name[id] = user
+            self._name_to_id[user] = id
 
-    async def get_room_name_async(self, room_id: str) -> Optional[str]:
-        """Get the room name for a given room ID, using async BDK calls if needed.
 
-        Args:
-            room_id: The room's stream ID.
+def _client_cert_post(host: str, request_url: str, cert_file: str, key_file: str) -> str:
+    # Define the client certificate settings for https connection
+    context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
+    context.load_cert_chain(certfile=cert_file, keyfile=key_file)
 
-        Returns:
-            The room's display name, or None if not found.
-        """
-        # Check cache first
-        cached = self.get_room_name(room_id)
-        if cached:
-            return cached
+    # Create a connection to submit HTTP requests
+    connection = http.client.HTTPSConnection(host, port=443, context=context)
 
-        # Try to resolve using stream service
-        if self._stream_service is None:
-            return None
+    # Use connection to submit a HTTP POST request
+    # Note that we omit content-type headers and the request body per Symphony's docs here:
+    # https://rest-api.symphony.com/main/bot-authentication/session-authenticate
+    connection.request(method="POST", url=request_url, headers={})
 
-        try:
-            room_info = await self._stream_service.get_room_info(room_id)
-            if room_info and room_info.room_attributes:
-                room_name = room_info.room_attributes.name
-                with self._lock:
-                    self._name_to_id[room_name] = room_id
-                    self._id_to_name[room_id] = room_name
-                return room_name
-        except Exception as e:
-            log.error(f"Error getting room info for '{room_id}': {e}")
+    # Print the HTTP response from the IOT service endpoint
+    response = connection.getresponse()
 
-        return None
+    if response.status != 200:
+        raise Exception(f"Cannot connect for symphony handshake to https://{host}{request_url}: {response.status}:{response.reason}")
+    data = response.read().decode("utf-8")
+    return json.loads(data)
 
-    def set_im_id(self, user_identifier: str, stream_id: str):
-        """Register an IM stream ID for a user.
 
-        Args:
-            user_identifier: The user's display name or user ID.
-            stream_id: The IM stream ID.
-        """
-        with self._lock:
-            self._id_to_name[stream_id] = user_identifier
-            self._name_to_id[user_identifier] = stream_id
+def _symphony_session(
+    auth_host: str,
+    session_auth_path: str,
+    key_auth_path: str,
+    cert_string: str,
+    key_string: str,
+) -> Dict[str, str]:
+    """Setup symphony session and return the header
 
-    def register_room(self, room_name: str, room_id: str):
-        """Manually register a room name to ID mapping.
+    Args:
+        auth_host (str): authentication host, like `company-api.symphony.com`
+        session_auth_path (str): path to authenticate session, like `/sessionauth/v1/authenticate`
+        key_auth_path (str): path to authenticate key, like `/keyauth/v1/authenticate`
+        cert_string (str): pem format string of client certificate
+        key_string (str): pem format string of client private key
+    Returns:
+        Dict[str, str]: headers from authentication
+    """
+    with NamedTemporaryFile(mode="wt", delete=False) as cert_file:
+        with NamedTemporaryFile(mode="wt", delete=False) as key_file:
+            cert_file.write(cert_string)
+            key_file.write(key_string)
 
-        Args:
-            room_name: The display name of the room.
-            room_id: The room's stream ID.
-        """
-        with self._lock:
-            self._name_to_id[room_name] = room_id
-            self._id_to_name[room_id] = room_name
+    data = _client_cert_post(auth_host, session_auth_path, cert_file.name, key_file.name)
+    session_token = data["token"]
+
+    data = _client_cert_post(auth_host, key_auth_path, cert_file.name, key_file.name)
+    key_manager_token = data["token"]
+
+    headers = {
+        "sessionToken": session_token,
+        "keyManagerToken": key_manager_token,
+        "Accept": "application/json",
+    }
+    return headers
+
+
+def _get_room_id(room_name: str, room_search_url: str, header: Dict[str, str]) -> Optional[str]:
+    """Given a room name, find its room ID"""
+    query = {"query": room_name}
+    res = requests.post(
+        url=room_search_url,
+        json=query,
+        headers=header,
+    )
+    if res and res.status_code == 200:
+        res_json = res.json()
+        for room in res_json["rooms"]:
+            # in theory there could be a room whose name is a subset of another, and so the search could return multiple
+            # go through search results to find room with name exactly as given
+            name = room.get("roomAttributes", {}).get("name")
+            if name and name == room_name:
+                id = room.get("roomSystemInfo", {}).get("id")
+                if id:
+                    return id
+        return None  # actually no exact matches, or malformed content from symphony
+    else:
+        log.error(f"ERROR looking up Symphony room_id for room {room_name}: status {res.status_code} text {res.text}")
+
+
+def _get_user_ids_in_room(room_id: str, room_members_url: str, header: Dict[str, str]) -> List[str]:
+    """Given a room id, returns a list of id's as strings for users in the room."""
+    res = requests.get(
+        url=room_members_url.format(room_id=room_id),
+        headers=header,
+    )
+    user_id_list = []
+    if res and res.status_code == 200:
+        res_json = res.json()
+        for val in res_json:
+            if user_id := val.get("id"):
+                user_id_list.append(str(user_id))
+            else:
+                log.error(f"Malformed user {val} in Symphony room with id {room_id}")
+    else:
+        log.error(
+            f"ERROR: failed to query Symphony for room name from id {room_id} via url {room_members_url}: code {res.status_code} text {res.text}"
+        )
+    return user_id_list
+
+
+def _get_room_name(room_id: str, room_info_url: str, header: Dict[str, str]):
+    """Given a room ID, find its name"""
+    url = room_info_url.format(room_id=room_id)
+    res = requests.get(
+        url,
+        headers=header,
+    )
+    if res and res.status_code == 200:
+        res_json = res.json()
+        name = res_json.get("roomAttributes", {}).get("name")
+        if name:
+            return name
+        log.error(f"ERROR: malformed response from Symphony room info call to get name from id {room_id} via url {url}: {res_json}")
+    else:
+        log.error(f"ERROR: failed to query Symphony for room name from id {room_id} via url {url}: code {res.status_code} text {res.text}")

@@ -36,7 +36,7 @@ classifiers = [
 dependencies = [
     "csp",
     "pydantic>=2",
-    "symphony-bdk-python>=2.0.0",
+    "requests",
 ]
 
 [project.optional-dependencies]
@@ -55,6 +55,9 @@ develop = [
     "twine",
     "uv",
     "wheel",
+    # v1
+    "chatom>=0.1.0,<0.2.0",
+    "symphony-bdk-python>=2.0.0",
 ]
 
 [project.scripts]
