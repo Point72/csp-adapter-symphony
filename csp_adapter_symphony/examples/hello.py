@@ -1,74 +1,90 @@
+"""Example Symphony bot that replies "Hello!" to greetings.
+
+This example demonstrates:
+- Loading configuration from environment variables
+- Subscribing to messages
+- Replying with user mentions
+
+Environment Variables Required:
+    SYMPHONY_HOST: Your Symphony pod hostname
+    SYMPHONY_BOT_USERNAME: Bot's service account username
+    SYMPHONY_BOT_COMBINED_CERT_PATH: Path to combined cert file
+
+Optional:
+    AUTH_HOST: Auth host (defaults to SYMPHONY_HOST with -api suffix)
+"""
+
 import os
 from datetime import timedelta
 
 import csp
+from chatom.base import Message
 from csp import ts
 
-from csp_adapter_symphony import SymphonyAdapter, SymphonyAdapterConfig, SymphonyMessage, mention_user
-
-AGENT_HOST = os.environ["AGENT_HOST"]
-SYMPHONY_MESSAGE_CREATE_URL = f"https://{AGENT_HOST}/agent/v4/stream/{{sid}}/message/create"
-SYMPHONY_DATAFEED_CREATE_URL = f"https://{AGENT_HOST}/agent/v5/datafeeds"
-SYMPHONY_DATAFEED_DELETE_URL = f"https://{AGENT_HOST}/agent/v5/datafeeds/{{datafeed_id}}"
-SYMPHONY_DATAFEED_READ_URL = f"https://{AGENT_HOST}/agent/v5/datafeeds/{{datafeed_id}}/read"
-SYMPHONY_ROOM_SEARCH_URL = f"https://{AGENT_HOST}/pod/v3/room/search"
-SYMPHONY_ROOM_INFO_URL = f"https://{AGENT_HOST}/pod/v3/room/{{room_id}}/info"
-SYMPHONY_IM_CREATE_URL = f"https://{AGENT_HOST}/pod/v1/im/create"
-SYMPHONY_ROOM_MEMBERS_URL = f"https://{AGENT_HOST}/pod/v2/room/{{room_id}}/membership/list"
-SYMPHONY_PRESENCE_URL = f"https://{AGENT_HOST}/pod/v2/user/presence"
-AUTH_HOST = AGENT_HOST.replace(".symphony", "-api.symphony")
-SESSION_AUTH_PATH = "/sessionauth/v1/authenticate"
-KEY_AUTH_PATH = "/keyauth/v1/authenticate"
-
-
-config = SymphonyAdapterConfig(
-    symphony_host=AGENT_HOST,
-    auth_host=AUTH_HOST,
-    session_auth_path=SESSION_AUTH_PATH,
-    key_auth_path=KEY_AUTH_PATH,
-    message_create_url=SYMPHONY_MESSAGE_CREATE_URL,
-    presence_url=SYMPHONY_PRESENCE_URL,
-    datafeed_create_url=SYMPHONY_DATAFEED_CREATE_URL,
-    datafeed_delete_url=SYMPHONY_DATAFEED_DELETE_URL,
-    datafeed_read_url=SYMPHONY_DATAFEED_READ_URL,
-    room_search_url=SYMPHONY_ROOM_SEARCH_URL,
-    room_info_url=SYMPHONY_ROOM_INFO_URL,
-    im_create_url=SYMPHONY_IM_CREATE_URL,
-    room_members_url=SYMPHONY_ROOM_MEMBERS_URL,
-    cert=os.environ["CERT_PATH"],
-    key=os.environ["KEY_PATH"],
+from csp_adapter_symphony import (
+    SymphonyAdapter,
+    SymphonyAdapterConfig,
+    SymphonyMessage,
+    SymphonyPresenceStatus,
+    mention_user_by_uid,
 )
+
+# Customize - set these environment variables or modify directly
+SYMPHONY_HOST = os.environ["SYMPHONY_HOST"]
+# Auth host is typically different - e.g., replacing ".symphony" with "-api.symphony"
+AUTH_HOST = os.environ.get("AUTH_HOST", SYMPHONY_HOST.replace(".symphony", "-api.symphony"))
+
+# Configuration with all separate hosts
+config = SymphonyAdapterConfig(
+    host=SYMPHONY_HOST,  # Default/fallback host
+    pod_host=SYMPHONY_HOST,  # Pod API host (for room info, presence, etc.)
+    agent_host=SYMPHONY_HOST,  # Agent API host (for messages, datafeed)
+    session_auth_host=AUTH_HOST,  # Session Auth host (for authentication)
+    key_manager_host=AUTH_HOST,  # Key Manager host (for key auth)
+    bot_certificate_path=os.environ["SYMPHONY_BOT_COMBINED_CERT_PATH"],
+    bot_username=os.environ["SYMPHONY_BOT_USERNAME"],
+    ssl_verify=False,
+)
+
+print(f"Symphony Host: {SYMPHONY_HOST}")
+print(f"Auth Host: {AUTH_HOST}")
+print(f"Bot username: {config.bot_username}")
+print(f"Certificate: {os.environ['SYMPHONY_BOT_COMBINED_CERT_PATH']}")
 
 
 @csp.node
-def reply_hi_when_mentioned(msg: ts[SymphonyMessage]) -> ts[SymphonyMessage]:
-    """Add a reaction to every message that starts with hello."""
-    if "hello" in msg.msg.lower():
-        return SymphonyMessage(
-            room=msg.room,
-            msg=f"Hello {mention_user(msg.user_id)}!",
-        )
+def reply_to_hello(msg: ts[Message]) -> ts[SymphonyMessage]:
+    """Reply to messages containing 'hello'."""
+    if "hello" in msg.text.lower():
+        # Create a mention for the author and reply in the same channel
+        mention = mention_user_by_uid(msg.author_id)
+        reply = msg.as_reply(f"Hello {mention}!")
+        return reply
 
 
 def graph():
     # Create a SymphonyAdapter object
     adapter = SymphonyAdapter(config)
 
+    # Set bot presence to available
+    adapter.publish_presence(csp.const(SymphonyPresenceStatus.AVAILABLE))
+
     # Subscribe and unroll the messages
+    # Use rooms={"Room1", "Room2"} to limit to specific rooms
     msgs = csp.unroll(adapter.subscribe())
 
-    # Print it out locally for debugging
-    csp.print("msgs", msgs)
+    # Print messages locally for debugging
+    csp.print("Received:", msgs)
 
-    # Add the reaction node
-    responses = reply_hi_when_mentioned(msgs)
+    # Handle different types of messages
+    hello_responses = reply_to_hello(msgs)
 
-    # Print it out locally for debugging
-    csp.print("responses", responses)
-
-    # Publish the responses
-    adapter.publish(responses)
+    # Publish all responses
+    adapter.publish(hello_responses)
 
 
 if __name__ == "__main__":
-    csp.run(graph, realtime=True, endtime=timedelta(seconds=120))
+    print("Starting Symphony bot...")
+    print("The bot will run for 2 minutes. Press Ctrl+C to stop earlier.")
+    csp.run(graph, realtime=True, endtime=timedelta(minutes=2))
+    print("Bot stopped.")

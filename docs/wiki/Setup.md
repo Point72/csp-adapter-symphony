@@ -1,84 +1,279 @@
-This guide will help you setup a new Symphony application.
+# Symphony Bot Setup
+
+This guide will help you set up a Symphony bot application using csp-adapter-symphony.
 
 > [!TIP]
-> Find relevant docs with GitHub’s search function, use `repo:Point72/csp-adapter-symphony type:wiki <search terms>` to search the documentation Wiki Pages.
+> Find relevant docs with GitHub's search function, use `repo:Point72/csp-adapter-symphony type:wiki <search terms>` to search the documentation Wiki Pages.
 
-# Symphony Configuration
+## Prerequisites
 
-Follow [the documentation for creating a Certificate Authentication Workflow-based bot](https://docs.developers.symphony.com/bots/authentication/certificate-authentication).
+- A Symphony environment with admin access
+- Python 3.10 or higher
+- Authentication credentials (RSA key pair OR certificate)
+
+## Creating a Bot Account
+
+Follow [the documentation for creating an RSA Authentication bot](https://docs.developers.symphony.com/bots/authentication/rsa-authentication).
 
 Take note of:
 
-- The Bot's name
-- The Bot's Key and Certificate
+- The Bot's username
+- The Bot's RSA private key (`.pem` file) OR certificate file
 
-# Managing Key/Certificate
+## Basic Configuration
 
-You should have an `key` and a `cert` from the above steps.
+The adapter uses chatom's `SymphonyConfig` for connection settings:
 
-These can be configured directly on the `SymphonyAdapterConfig`:
+```python
+from chatom.symphony import SymphonyConfig
+from csp_adapter_symphony import SymphonyAdapter
+
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/private-key.pem",
+)
+
+adapter = SymphonyAdapter(config)
+```
+
+## Authentication Methods
+
+### RSA Private Key Authentication
+
+The most common method. You provide an RSA private key file.
+
+```python
+from chatom.symphony import SymphonyConfig
+
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/private-key.pem",
+)
+```
+
+### Private Key Content (Inline)
+
+For secrets management, you can provide the private key content directly:
+
+```python
+from pydantic import SecretStr
+from chatom.symphony import SymphonyConfig
+
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_content=SecretStr("""-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEA...
+-----END RSA PRIVATE KEY-----"""),
+)
+```
+
+### Certificate-Based Authentication
+
+Some Symphony environments require certificate-based authentication. This typically uses a combined certificate and private key file (also called a combined PEM file).
+
+A combined PEM file contains both the certificate and private key:
+
+```
+-----BEGIN CERTIFICATE-----
+MIIDxTCCAq2gAwIBAgIQAq...
+-----END CERTIFICATE-----
+-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEA...
+-----END RSA PRIVATE KEY-----
+```
+
+To use certificate authentication:
+
+```python
+from chatom.symphony import SymphonyConfig
+
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot@domain.com",
+    bot_certificate_path="/path/to/combined.pem",
+)
+```
+
+**Creating a combined PEM file:**
+
+If you have separate certificate and key files, combine them:
+
+```bash
+cat certificate.crt private-key.pem > combined.pem
+```
+
+Or if you have a PKCS#12 (.p12) file:
+
+```bash
+openssl pkcs12 -in certificate.p12 -out combined.pem -nodes
+```
+
+## Extended Configuration (SymphonyAdapterConfig)
+
+For adapter-specific options, use `SymphonyAdapterConfig` which extends chatom's `SymphonyConfig`:
+
+```python
+from csp_adapter_symphony import SymphonyAdapter, SymphonyAdapterConfig
+
+config = SymphonyAdapterConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/private-key.pem",
+    # Adapter-specific options
+    error_room="Bot Errors",
+    inform_client=True,
+    max_attempts=5,
+)
+
+adapter = SymphonyAdapter(config)
+```
+
+### Adapter-Specific Options
+
+| Option                | Type    | Default  | Description                           |
+| --------------------- | ------- | -------- | ------------------------------------- |
+| `error_room`          | `str`   | `None`   | Room name for error notifications     |
+| `inform_client`       | `bool`  | `False`  | Notify users when message send fails  |
+| `max_attempts`        | `int`   | `10`     | Max retry attempts (-1 for unlimited) |
+| `initial_interval_ms` | `int`   | `500`    | Initial retry interval in ms          |
+| `multiplier`          | `float` | `2.0`    | Retry backoff multiplier              |
+| `max_interval_ms`     | `int`   | `300000` | Maximum retry interval in ms          |
+| `datafeed_version`    | `str`   | `"v2"`   | Datafeed version ("v1" or "v2")       |
+| `ssl_verify`          | `bool`  | `True`   | Whether to verify SSL certificates    |
+
+## Custom Host Configuration
+
+Some Symphony deployments use different hosts for different API endpoints. For example:
+
+- Pod API: `pod.company.symphony.com`
+- Agent API: `agent.company.symphony.com`
+- Session Auth: `auth.company.symphony.com`
+- Key Manager: `km.company.symphony.com`
+
+You can configure each endpoint separately:
+
+```python
+from chatom.symphony import SymphonyConfig
+
+config = SymphonyConfig(
+    host="company.symphony.com",           # Default/fallback host
+    pod_host="pod.company.symphony.com",   # Pod API host
+    agent_host="agent.company.symphony.com",  # Agent API host
+    session_auth_host="auth.company.symphony.com",  # Session Auth host
+    key_manager_host="km.company.symphony.com",     # Key Manager host
+    bot_username="my-bot",
+    bot_certificate_path="/path/to/combined.pem",
+)
+```
+
+> [!NOTE]
+> If only `host` is specified, all endpoints will use that host. Use the separate host options only when your Symphony environment requires different endpoints.
+
+## SSL Configuration
+
+### Custom CA Certificate
+
+If your Symphony environment uses a custom or self-signed certificate, specify the CA certificate bundle:
+
+```python
+from chatom.symphony import SymphonyConfig
+
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/private-key.pem",
+    trust_store_path="/path/to/ca-bundle.pem",
+)
+```
+
+### Disabling SSL Verification
+
+> [!WARNING]
+> Disabling SSL verification is **not recommended** for production use. Only use this for development or testing environments.
 
 ```python
 from csp_adapter_symphony import SymphonyAdapterConfig
 
-config = SymphonyAdapterConfig(key="BEGIN PRIVATE KEY...", cert="BEGIN CERTIFICATE...")
+config = SymphonyAdapterConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/private-key.pem",
+    ssl_verify=False,  # Disables SSL certificate verification
+)
 ```
 
-Alternatively, these could be stored in local files and the configuration will read them:
+## Proxy Configuration
 
-**.gitignore**
-
-```raw
-.key
-.cert
-```
-
-**.key**
-
-```raw
-BEGIN PRIVATE KEY
-...
-```
-
-**.cert**
-
-```raw
-BEGIN CERTIFICATE
-...
-```
+To connect through a proxy:
 
 ```python
-from csp_adapter_symphony import SymphonyAdapterConfig
+from pydantic import SecretStr
+from chatom.symphony import SymphonyConfig
 
-config = SymphonyAdapterConfig(key=".key", cert=".cert")
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/private-key.pem",
+    proxy_host="proxy.company.com",
+    proxy_port=8080,
+    proxy_username="proxy-user",
+    proxy_password=SecretStr("proxy-password"),
+)
 ```
 
-# Symphony Routes
+## Using the Adapter
 
-Symphony is hosted per-deployment.
-As such, it can be can be configured in a variety of ways at a variety of URLs.
+Once configured, create the adapter and use it in a CSP graph:
 
-`SymphonyAdapterConfig` allows for configuration of all the required routes via arguments. Note that some of them are format strings, and thus expect Python format string style placeholders.
+```python
+from datetime import datetime, timedelta
 
-- `auth_host`: Authentication host, like `company-api.symphony.com`
-- `session_auth_path`: Path to authenticate session, like `/sessionauth/v1/authenticate`
-- `key_auth_path`: Path to authenticate key, like `/keyauth/v1/authenticate`
-- `message_create_url`: Format-string path to create a message, like `https://SYMPHONY_HOST/agent/v4/stream/{{sid}}/message/create`
-- `presence_url`: String path to set presence information, like `https://SYMPHONY_HOST/pod/v2/user/presence`
-- `datafeed_create_url`: String path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds`
-- `datafeed_delete_url`: Format-string path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds/{{datafeed_id}}`
-- `datafeed_read_url`: Format-string path to create datafeed, like `https://SYMPHONY_HOST/agent/v5/datafeeds/{{datafeed_id}}/read`
-- `room_search_url`: Format-string path to create datafeed, like `https://SYMPHONY_HOST/pod/v3/room/search`
-- `room_info_url`: Format-string path to create datafeed, like `https://SYMPHONY_HOST/pod/v3/room/{{room_id}}/info`
-- `room_members_url`: (Optional) Format-string path to get room members in a room, like `https://SYMPHONY_HOST/pod/v2/room/{{room_id}}/membership/list`
+import csp
 
-# Extra Configuration
+from chatom.symphony import SymphonyConfig
+from csp_adapter_symphony import SymphonyAdapter, SymphonyMessage
 
-The `SymphonyAdapterConfig` has a few extra features that can be adjusted as needed:
 
-- `error_room`: (Optional) A room to direct error messages to, if a message fails to be sent over symphony, or if the adapter crashes
-- `inform_client`: Whether to inform the intended recipient of a failed message that the message failed
-- `max_attempts`: Max attempts for datafeed and message post requests before raising exception. If -1, no maximum
-- `initial_interval_ms`: Initial interval to wait between attempts, in milliseconds
-- `multiplier`: Multiplier between attempt delays for exponential backoff
-- `max_interval_ms`: maximum delay between retry attempts, in milliseconds
+config = SymphonyConfig(
+    host="company.symphony.com",
+    bot_username="my-bot",
+    bot_private_key_path="/path/to/key.pem",
+)
+
+
+@csp.graph
+def my_bot():
+    adapter = SymphonyAdapter(config)
+
+    # Subscribe to messages
+    messages = adapter.subscribe()
+
+    # Process messages...
+    csp.print("Received", messages)
+
+
+if __name__ == "__main__":
+    csp.run(
+        my_bot,
+        starttime=datetime.now(),
+        endtime=timedelta(hours=8),
+        realtime=True,
+    )
+```
+
+## Configuration Summary
+
+| Config Class                                 | Use Case                                                    |
+| -------------------------------------------- | ----------------------------------------------------------- |
+| `chatom.symphony.SymphonyConfig`             | Basic connection settings (host, auth, proxy)               |
+| `csp_adapter_symphony.SymphonyAdapterConfig` | Extended with CSP adapter options (retries, error handling) |
+
+Both config classes work with `SymphonyAdapter`. Use `SymphonyAdapterConfig` when you need the extended options.
+
+## Next Steps
+
+- See [Examples](Examples) for usage examples
+- See [API Reference](API-Reference) for detailed API documentation
