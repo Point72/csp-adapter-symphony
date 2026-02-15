@@ -111,21 +111,6 @@ artifacts = []
 src = "/"
 
 [tool.hatch.build.targets.sdist]
-<<<<<<< before updating
-packages = ["csp_adapter_symphony"]
-exclude = [
-    "/.github",
-    "/.gitignore",
-    "/docs",
-]
-
-[tool.hatch.build.targets.wheel]
-packages = ["csp_adapter_symphony"]
-exclude = [
-    "/.github",
-    "/.gitignore",
-    "/docs",
-=======
 packages = [
     "csp_adapter_symphony",
 ]
@@ -133,7 +118,6 @@ packages = [
 [tool.hatch.build.targets.wheel]
 packages = [
     "csp_adapter_symphony",
->>>>>>> after updating
 ]
 
 [tool.hatch.build.targets.wheel.shared-data]
@@ -168,11 +152,7 @@ section-order = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-<<<<<<< before updating
-"__init__.py" = ["F401", "F403"]
-=======
 "__init__.py" = [
     "F401",
     "F403",
 ]
->>>>>>> after updating
