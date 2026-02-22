@@ -141,14 +141,12 @@ js/node_modules
 js/test-results
 js/playwright-report
 js/*.tgz
-csp_adapter_symphony/extension
 
 # Jupyter
 .ipynb_checkpoints
 .autoversion
 Untitled*.ipynb
-!csp_adapter_symphony/extension/csp_adapter_symphony.json
-!csp_adapter_symphony/extension/install.json
+csp_adapter_symphony/extension
 csp_adapter_symphony/nbextension
 csp_adapter_symphony/labextension
 
@@ -157,3 +155,7 @@ csp_adapter_symphony/labextension
 
 # Rust
 target
+
+# Hydra
+outputs/
+multirun/
