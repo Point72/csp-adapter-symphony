@@ -7,6 +7,8 @@ the generic chatom CSP layer.
 
 import asyncio
 import logging
+import queue
+import threading
 from typing import Optional, Set
 
 import csp
@@ -68,6 +70,9 @@ class SymphonyAdapter(BackendAdapter):
         backend = SymphonyBackend(config=config)
         super().__init__(backend)
         self._config = config
+        self._presence_queue: queue.Queue = queue.Queue()
+        self._presence_thread: Optional[threading.Thread] = None
+        self._presence_stop = threading.Event()
 
     @property
     def config(self) -> SymphonyConfig:
@@ -136,44 +141,64 @@ class SymphonyAdapter(BackendAdapter):
         # SymphonyMessage inherits from
         super().publish(msg)
 
+    def _start_presence_worker(self, timeout: float):
+        """Start the background presence worker thread.
+
+        Creates a single persistent thread with its own event loop and backend
+        connection that processes presence updates from a queue.
+        """
+        if self._presence_thread is not None:
+            return
+
+        config = self._config
+        backend_class = type(self._backend)
+        presence_queue = self._presence_queue
+        stop_event = self._presence_stop
+
+        def worker():
+            async def run_loop():
+                thread_backend = backend_class(config=config)
+                try:
+                    await asyncio.wait_for(thread_backend.connect(), timeout=timeout)
+                    while not stop_event.is_set():
+                        try:
+                            status = presence_queue.get(timeout=0.5)
+                            await asyncio.wait_for(thread_backend.set_presence(status), timeout=timeout)
+                        except queue.Empty:
+                            continue
+                        except asyncio.TimeoutError:
+                            log.error("Timeout setting presence")
+                        except Exception:
+                            log.exception("Failed setting presence")
+                except asyncio.TimeoutError:
+                    log.error("Timeout connecting presence worker")
+                except Exception:
+                    log.exception("Error in presence worker")
+                finally:
+                    try:
+                        await thread_backend.disconnect()
+                    except Exception:
+                        pass
+
+            try:
+                asyncio.run(run_loop())
+            except Exception:
+                log.exception("Error in presence thread")
+
+        self._presence_thread = threading.Thread(target=worker, daemon=True)
+        self._presence_thread.start()
+
     @csp.node
     def _set_symphony_presence(self, presence: ts[SymphonyPresenceStatus], timeout: float = 5.0):
         """Internal node for setting Symphony presence.
 
-        Uses a thread with asyncio.run() to avoid event loop conflicts.
-        Creates a new backend instance per call to ensure proper async context.
+        Uses a persistent worker thread to avoid creating threads per tick.
         """
+        with csp.start():
+            self._start_presence_worker(timeout)
+
         if csp.ticked(presence):
-            status = presence.name.lower()
-            config = self._config
-            backend_class = type(self._backend)
-
-            def run_presence():
-                async def set_presence_async():
-                    # Create new backend for this thread (aiohttp sessions are loop-bound)
-                    thread_backend = backend_class(config=config)
-                    try:
-                        await asyncio.wait_for(thread_backend.connect(), timeout=timeout)
-                        await asyncio.wait_for(thread_backend.set_presence(status), timeout=timeout)
-                    except asyncio.TimeoutError:
-                        log.error("Timeout setting presence")
-                    except Exception:
-                        log.exception("Failed setting presence")
-                    finally:
-                        try:
-                            await thread_backend.disconnect()
-                        except Exception:
-                            pass
-
-                try:
-                    asyncio.run(set_presence_async())
-                except Exception:
-                    log.exception("Error in presence thread")
-
-            import threading
-
-            thread = threading.Thread(target=run_presence, daemon=True)
-            thread.start()
+            self._presence_queue.put(presence.name.lower())
 
     # @csp.graph # NOTE: cannot use decorator, https://github.com/Point72/csp/issues/183
     def publish_presence(self, presence: ts[SymphonyPresenceStatus], timeout: float = 5.0):
