@@ -12,7 +12,7 @@ authors = [
 description = "A csp adapter for symphony"
 readme = "README.md"
 license = { text = "Apache-2.0" }
-version = "0.3.1"
+version = "0.4.0"
 requires-python = ">=3.10"
 keywords = [
     "csp",
@@ -20,6 +20,7 @@ keywords = [
     "symphony",
     "chat",
     "chatbot",
+    "symphony-bdk",
 ]
 
 classifiers = [
@@ -39,8 +40,7 @@ classifiers = [
 dependencies = [
     "csp",
     "pydantic>=2",
-    "requests",
-    "tenacity",
+    "symphony-bdk-python>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +53,7 @@ develop = [
     "mdformat",
     "mdformat-tables>=1",
     "pytest",
+    "pytest-asyncio",
     "pytest-cov",
     "ruff",
     "twine",
@@ -68,7 +69,7 @@ Repository = "https://github.com/Point72/csp-adapter-symphony"
 Homepage = "https://github.com/Point72/csp-adapter-symphony"
 
 [tool.bumpversion]
-current_version = "0.3.1"
+current_version = "0.4.0"
 commit = true
 tag = true
 commit_args = "-s"
@@ -87,12 +88,15 @@ replace = 'version = "{new_version}"'
 branch = true
 omit = [
     "csp_adapter_symphony/tests/integration/",
+    "csp_adapter_symphony/examples/*",
 ]
 [tool.coverage.report]
 exclude_also = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
     "@(abc\\.)?abstractmethod",
+    "pragma: no cover",
+    "os._exit",
 ]
 ignore_errors = true
 fail_under = 75
