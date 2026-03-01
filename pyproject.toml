@@ -88,6 +88,7 @@ branch = true
 omit = [
     "csp_adapter_symphony/tests/integration/",
 ]
+
 [tool.coverage.report]
 exclude_also = [
     "raise NotImplementedError",
