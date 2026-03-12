@@ -145,3 +145,11 @@ target
 # Hydra
 outputs/
 multirun/
+
+# Auth
+.env.sh
+combined.pem
+
+# Reference
+symphony-api-spec
+symphony-bdk-python
