@@ -146,7 +146,11 @@ target
 outputs/
 multirun/
 
-<<<<<<< before updating
+# AI
+ROADMAP.md
+AGENTS.md
+.github/hooks/sdlc.json
+
 # Auth
 .env.sh
 combined.pem
@@ -154,9 +158,4 @@ combined.pem
 # Reference
 symphony-api-spec
 symphony-bdk-python
-=======
-# AI
-ROADMAP.md
-AGENTS.md
-.github/hooks/sdlc.json
->>>>>>> after updating
+
