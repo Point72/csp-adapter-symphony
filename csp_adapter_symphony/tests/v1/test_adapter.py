@@ -88,9 +88,8 @@ class TestSymphonyMessage:
             },
         )
         # Should detect mention via entity_data
-        assert msg.mentions_user("12345") is True
         assert msg.mentions_user(SymphonyUser(id="12345")) is True
-        assert msg.mentions_user("99999") is False
+        assert msg.mentions_user(SymphonyUser(id="99999")) is False
 
     def test_mentions_user_with_data_field(self):
         """Test mentions_user detection using data field (JSON string)."""
@@ -100,8 +99,8 @@ class TestSymphonyMessage:
             data='{"mention0": {"type": "com.symphony.user.mention", "id": [{"value": "12345"}]}}',
         )
         # Should detect mention via data field
-        assert msg.mentions_user("12345") is True
-        assert msg.mentions_user("99999") is False
+        assert msg.mentions_user(SymphonyUser(id="12345")) is True
+        assert msg.mentions_user(SymphonyUser(id="99999")) is False
 
     def test_message_id_property(self):
         """Test that message_id property returns id."""
