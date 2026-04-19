@@ -151,6 +151,7 @@ multirun/
 ROADMAP.md
 AGENTS.md
 .github/hooks/sdlc.json
+<<<<<<< before updating
 
 # Auth
 .env.sh
@@ -160,3 +161,6 @@ combined.pem
 symphony-api-spec
 symphony-bdk-python
 
+=======
+.superpowers
+>>>>>>> after updating
