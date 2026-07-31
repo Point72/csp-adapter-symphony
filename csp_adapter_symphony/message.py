@@ -1,5 +1,3 @@
-from typing import List
-
 from csp import Struct
 
 __all__ = ("SymphonyMessage", "format_with_message_ml")
@@ -27,7 +25,7 @@ class SymphonyMessage(Struct):
     user: str
     user_email: str  # email of the author, for mentions
     user_id: str  # uid of the author, for mentions
-    tags: List[str]  # list of user ids in message, for mentions
+    tags: list[str]  # list of user ids in message, for mentions
     room: str
     msg: str
     form_id: str

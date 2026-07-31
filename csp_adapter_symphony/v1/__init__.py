@@ -30,21 +30,15 @@ from .adapter import SymphonyAdapter
 SymphonyAdapterConfig = SymphonyConfig
 
 __all__ = [
-    # Adapter
     "SymphonyAdapter",
-    # Config
     "SymphonyAdapterConfig",
-    "SymphonyConfig",  # chatom config
-    "SymphonyRoomMapper",
-    # Backend (from chatom)
     "SymphonyBackend",
-    # Message (from chatom)
+    "SymphonyConfig",
     "SymphonyMessage",
-    # Presence (from chatom)
     "SymphonyPresenceStatus",
-    # Mentions (from chatom)
+    "SymphonyRoomMapper",
+    "format_cashtag",
+    "format_hashtag",
     "mention_user_by_email",
     "mention_user_by_uid",
-    "format_hashtag",
-    "format_cashtag",
 ]

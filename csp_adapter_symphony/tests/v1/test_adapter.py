@@ -4,7 +4,7 @@ This test module covers the SymphonyAdapter which wraps chatom's
 SymphonyBackend for use with CSP.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import csp
@@ -609,7 +609,7 @@ class TestSymphonyAdapterPresence:
         # Don't use realtime to avoid async issues
         csp.run(
             test_graph,
-            starttime=datetime.now(),
+            starttime=datetime.now(timezone.utc),
             endtime=timedelta(seconds=0.1),
         )
 
