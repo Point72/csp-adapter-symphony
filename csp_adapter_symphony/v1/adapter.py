@@ -9,7 +9,6 @@ import asyncio
 import logging
 import queue
 import threading
-from typing import Optional, Set
 
 import csp
 from chatom.csp import BackendAdapter
@@ -71,7 +70,7 @@ class SymphonyAdapter(BackendAdapter):
         super().__init__(backend)
         self._config = config
         self._presence_queue: queue.Queue = queue.Queue()
-        self._presence_thread: Optional[threading.Thread] = None
+        self._presence_thread: threading.Thread | None = None
         self._presence_stop = threading.Event()
 
     @property
@@ -87,8 +86,8 @@ class SymphonyAdapter(BackendAdapter):
     # @csp.graph # NOTE: cannot use decorator, https://github.com/Point72/csp/issues/183
     def subscribe(
         self,
-        channels: Optional[Set[str]] = None,
-        rooms: Optional[Set[str]] = None,
+        channels: set[str] | None = None,
+        rooms: set[str] | None = None,
         skip_own: bool = True,
         skip_history: bool = True,
     ) -> ts[[SymphonyMessage]]:
@@ -175,10 +174,7 @@ class SymphonyAdapter(BackendAdapter):
                 except Exception:
                     log.exception("Error in presence worker")
                 finally:
-                    try:
-                        await thread_backend.disconnect()
-                    except Exception:
-                        pass
+                    await thread_backend.disconnect()
 
             try:
                 asyncio.run(run_loop())

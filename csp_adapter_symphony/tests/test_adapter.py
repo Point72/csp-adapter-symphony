@@ -325,7 +325,6 @@ class TestSymphony:
                     if inform_client:
                         resp_mock.json.return_value = {}
                         resp_mock.status_code = 401
-                        ...
                     # send message
                 elif url == "https://symphony.host/pod/v1/im/create":
                     if inform_client:

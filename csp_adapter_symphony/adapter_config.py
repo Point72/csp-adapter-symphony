@@ -3,10 +3,10 @@ import json
 import logging
 import ssl
 import threading
+from collections.abc import Callable
 from datetime import timedelta
 from functools import cached_property
 from tempfile import NamedTemporaryFile
-from typing import Callable, Dict, List, Optional, Union
 from urllib.parse import urljoin
 
 import requests
@@ -15,7 +15,11 @@ from pydantic import AliasChoices, BaseModel, Field, FilePath, computed_field, f
 
 __all__ = ("SymphonyAdapterConfig", "SymphonyRoomMapper")
 
-log = logging.getLogger(__file__)
+log = logging.getLogger(__name__)
+
+
+class _SymphonyAuthenticationError(RuntimeError):
+    pass
 
 
 class SymphonyAdapterConfig(BaseModel):
@@ -39,14 +43,14 @@ class SymphonyAdapterConfig(BaseModel):
     room_search_url: str = Field("", description="Format-string path to search rooms, like `https://SYMPHONY_HOST/pod/v3/room/search`")
     room_info_url: str = Field("", description="Format-string path to get room info, like `https://SYMPHONY_HOST/pod/v3/room/{room_id}/info`")
     im_create_url: str = Field("", description="Format-string path to create instant message channel, like `https://SYMPHONY_HOST/pod/v1/im/create`")
-    room_members_url: Optional[str] = Field(
+    room_members_url: str | None = Field(
         None, description="Format-string path to get room members in a room, like `https://SYMPHONY_HOST/pod/v2/room/{{room_id}}/membership/list`"
     )
 
-    cert: Union[str, FilePath] = Field(description="Pem format string of client certificate", validation_alias=AliasChoices("cert", "cert_string"))
-    key: Union[str, FilePath] = Field(description="Pem format string of client private key", validation_alias=AliasChoices("key", "key_string"))
+    cert: str | FilePath = Field(description="Pem format string of client certificate", validation_alias=AliasChoices("cert", "cert_string"))
+    key: str | FilePath = Field(description="Pem format string of client private key", validation_alias=AliasChoices("key", "key_string"))
 
-    error_room: Optional[str] = Field(
+    error_room: str | None = Field(
         None,
         description="A room to direct error messages to, if a message fails to be sent over symphony, or if the SymphonyReaderPushAdapter crashes",
     )
@@ -105,7 +109,7 @@ class SymphonyAdapterConfig(BaseModel):
     # 'Decorated property not supported' error
     @computed_field  # type: ignore[misc]
     @cached_property
-    def header(self) -> Dict[str, str]:
+    def header(self) -> dict[str, str]:
         """Returns header from authentication. This performs a network request. The result gets cached for re-use"""
         return _symphony_session(
             auth_host=self.auth_host,
@@ -129,11 +133,11 @@ class SymphonyAdapterConfig(BaseModel):
             before_sleep=tenacity.before_sleep_log(log, logging.DEBUG),
         )
 
-    def get_room_id(self, room_name: str) -> Optional[str]:
+    def get_room_id(self, room_name: str) -> str | None:
         """Given a room name, returns the corresponding room id, if it can be found. This performs a network request."""
         return _get_room_id(room_name=room_name, room_search_url=self.room_search_url, header=self.header)
 
-    def get_user_ids_in_room(self, room_id: Optional[str] = None, room_name: Optional[str] = None) -> List[str]:
+    def get_user_ids_in_room(self, room_id: str | None = None, room_name: str | None = None) -> list[str]:
         """Given a room id or room name, returns the user id's of the users in the room. Exactly one of 'room_id' or 'room_name' must be set."""
         room_name_is_none = room_name is None
         room_id_is_none = room_id is None
@@ -152,13 +156,13 @@ class SymphonyAdapterConfig(BaseModel):
             return []
         return _get_user_ids_in_room(room_id=true_room_id, room_members_url=self.room_members_url, header=self.header)
 
-    def get_room_name(self, room_id: str) -> Optional[str]:
+    def get_room_name(self, room_id: str) -> str | None:
         """Given room_id, returns the name of the room."""
         return _get_room_name(room_id=room_id, room_info_url=self.room_info_url, header=self.header)
 
 
 class SymphonyRoomMapper:
-    def __init__(self, room_search_url: str, room_info_url: str, header: Dict[str, str]):
+    def __init__(self, room_search_url: str, room_info_url: str, header: dict[str, str]):
         self._name_to_id = {}
         self._id_to_name = {}
         self._room_search_url = room_search_url
@@ -213,7 +217,9 @@ def _client_cert_post(host: str, request_url: str, cert_file: str, key_file: str
     response = connection.getresponse()
 
     if response.status != 200:
-        raise Exception(f"Cannot connect for symphony handshake to https://{host}{request_url}: {response.status}:{response.reason}")
+        raise _SymphonyAuthenticationError(
+            f"Cannot connect for symphony handshake to https://{host}{request_url}: {response.status}:{response.reason}"
+        )
     data = response.read().decode("utf-8")
     return json.loads(data)
 
@@ -224,7 +230,7 @@ def _symphony_session(
     key_auth_path: str,
     cert_string: str,
     key_string: str,
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Setup symphony session and return the header
 
     Args:
@@ -236,10 +242,9 @@ def _symphony_session(
     Returns:
         Dict[str, str]: headers from authentication
     """
-    with NamedTemporaryFile(mode="wt", delete=False) as cert_file:
-        with NamedTemporaryFile(mode="wt", delete=False) as key_file:
-            cert_file.write(cert_string)
-            key_file.write(key_string)
+    with NamedTemporaryFile(mode="wt", delete=False) as cert_file, NamedTemporaryFile(mode="wt", delete=False) as key_file:
+        cert_file.write(cert_string)
+        key_file.write(key_string)
 
     data = _client_cert_post(auth_host, session_auth_path, cert_file.name, key_file.name)
     session_token = data["token"]
@@ -255,7 +260,7 @@ def _symphony_session(
     return headers
 
 
-def _get_room_id(room_name: str, room_search_url: str, header: Dict[str, str]) -> Optional[str]:
+def _get_room_id(room_name: str, room_search_url: str, header: dict[str, str]) -> str | None:
     """Given a room name, find its room ID"""
     query = {"query": room_name}
     res = requests.post(
@@ -278,7 +283,7 @@ def _get_room_id(room_name: str, room_search_url: str, header: Dict[str, str]) -
         log.error(f"ERROR looking up Symphony room_id for room {room_name}: status {res.status_code} text {res.text}")
 
 
-def _get_user_ids_in_room(room_id: str, room_members_url: str, header: Dict[str, str]) -> List[str]:
+def _get_user_ids_in_room(room_id: str, room_members_url: str, header: dict[str, str]) -> list[str]:
     """Given a room id, returns a list of id's as strings for users in the room."""
     res = requests.get(
         url=room_members_url.format(room_id=room_id),
@@ -299,7 +304,7 @@ def _get_user_ids_in_room(room_id: str, room_members_url: str, header: Dict[str,
     return user_id_list
 
 
-def _get_room_name(room_id: str, room_info_url: str, header: Dict[str, str]):
+def _get_room_name(room_id: str, room_info_url: str, header: dict[str, str]):
     """Given a room ID, find its name"""
     url = room_info_url.format(room_id=room_id)
     res = requests.get(

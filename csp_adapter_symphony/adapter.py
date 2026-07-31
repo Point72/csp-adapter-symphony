@@ -2,7 +2,6 @@ import json
 import logging
 import threading
 from queue import Queue
-from typing import Dict, List, Optional, Tuple, Union
 
 import csp
 import requests
@@ -16,10 +15,14 @@ from .message import SymphonyMessage, format_with_message_ml
 
 __all__ = ("Presence", "SymphonyAdapter", "send_symphony_message")
 
-log = logging.getLogger(__file__)
+log = logging.getLogger(__name__)
 
 
-def _sync_create_data_feed(datafeed_create_url: str, header: Dict[str, str], datafeed_id: str = "") -> Tuple[requests.Response, str]:
+class _SymphonyAdapterError(RuntimeError):
+    pass
+
+
+def _sync_create_data_feed(datafeed_create_url: str, header: dict[str, str], datafeed_id: str = "") -> tuple[requests.Response, str]:
     r = requests.post(
         url=datafeed_create_url,
         headers=header,
@@ -30,7 +33,7 @@ def _sync_create_data_feed(datafeed_create_url: str, header: Dict[str, str], dat
     return r, datafeed_id
 
 
-def _get_or_create_datafeed(datafeed_create_url: str, header: Dict[str, str], datafeed_id: str = "") -> Tuple[requests.Response, str]:
+def _get_or_create_datafeed(datafeed_create_url: str, header: dict[str, str], datafeed_id: str = "") -> tuple[requests.Response, str]:
     """
     It is considered best practice that bot's only create and read from one datafeed. If your bot goes down, it should re-authenticate,
     and try to read from the previously created datafeed. If this fails then you should create a new datafeed, and begin reading from this new datafeed.
@@ -51,7 +54,7 @@ class Presence(csp.Enum):
     AWAY = Enum.auto()
 
 
-def send_symphony_message(msg: str, room_id: str, message_create_url: str, header: Dict[str, str]):
+def send_symphony_message(msg: str, room_id: str, message_create_url: str, header: dict[str, str]):
     """Wrap message string and send it to symphony"""
     out_json = {"message": f"<messageML>{msg}</messageML>"}
     url = message_create_url.format(sid=room_id)
@@ -62,7 +65,7 @@ def send_symphony_message(msg: str, room_id: str, message_create_url: str, heade
     )
 
 
-def create_im_stream(user_id: Union[str, List[str]], im_create_url: str, header: Dict[str, str]) -> Optional[str]:
+def create_im_stream(user_id: str | list[str], im_create_url: str, header: dict[str, str]) -> str | None:
     response = requests.post(
         url=im_create_url,
         json=[user_id] if isinstance(user_id, str) else user_id,
@@ -89,11 +92,12 @@ def _get_user_mentions(payload):
                 # then grab the payload
                 user_id = str(value["id"][0]["value"])
                 user_mentions.append(user_id)
-    finally:
-        return user_mentions
+    except (AttributeError, IndexError, KeyError, TypeError, json.JSONDecodeError):
+        log.exception("Failed to parse Symphony user mentions")
+    return user_mentions
 
 
-def _handle_event(event: dict, room_ids: set, room_mapper: SymphonyRoomMapper) -> Optional[SymphonyMessage]:
+def _handle_event(event: dict, room_ids: set, room_mapper: SymphonyRoomMapper) -> SymphonyMessage | None:
     if ("type" not in event) or ("payload" not in event):
         return None
     if event["type"] == "MESSAGESENT":
@@ -173,7 +177,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         config: SymphonyAdapterConfig,
         rooms: set,
         exit_msg: str = "",
-        room_mapper: Optional[SymphonyRoomMapper] = None,
+        room_mapper: SymphonyRoomMapper | None = None,
     ):
         """Setup Symphony Reader
 
@@ -210,9 +214,9 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         self._delete_datafeed_if_set()
         resp, datafeed_id = _get_or_create_datafeed(self._config.datafeed_create_url, self._config.header, self._datafeed_id)
         if resp.status_code == 403:
-            raise Exception("Reached maximum number of active datafeeds. Cannot create new datafeed.")
+            raise _SymphonyAdapterError("Reached maximum number of active datafeeds. Cannot create new datafeed.")
         elif resp.status_code not in (200, 201, 204):
-            raise Exception(f"ERROR: bad status ({resp.status_code}) from _get_or_create_datafeed. Cannot create new datafeed.")
+            raise _SymphonyAdapterError(f"ERROR: bad status ({resp.status_code}) from _get_or_create_datafeed. Cannot create new datafeed.")
         else:
             self._url = self._config.datafeed_read_url.format(datafeed_id=datafeed_id)
             self._datafeed_id = datafeed_id
@@ -222,7 +226,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         for room in self._rooms:
             room_id = self._room_mapper.get_room_id(room)
             if not room_id:
-                raise Exception(f"ERROR: unable to find Symphony room named {room}")
+                raise _SymphonyAdapterError(f"ERROR: unable to find Symphony room named {room}")
             self._room_ids.add(room_id)
 
         # start reader thread
@@ -242,7 +246,7 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
                 log.exception("Error on sending exit message and deleting datafeed on shutdown")
             self._thread.join()
 
-    def _get_new_ack_id_and_messages(self, ack_id: str) -> Tuple[str, List[SymphonyMessage]]:
+    def _get_new_ack_id_and_messages(self, ack_id: str) -> tuple[str, list[SymphonyMessage]]:
         ret = []
         resp = requests.post(url=self._url, headers=self._config.header, json={"ackId": ack_id})
         if resp.status_code == 400:
@@ -267,14 +271,14 @@ class SymphonyReaderPushAdapterImpl(PushInputAdapter):
         while self._running:
             try:
                 ack_id, ret = get_new_messages_func(ack_id)
-            except Exception as exc:
+            except Exception:
                 # On the final failure, this happens
                 # No need to retry these calls, we are failing anyways
                 error_msg = "An exception occured trying to interact with datafeed, max_attempts exceeded. Symphony Reader is shutting down..."
                 log.error(error_msg)
                 if self._config.error_room and (error_room_id := self._room_mapper.get_room_id(self._config.error_room)):
                     send_symphony_message(error_msg, error_room_id, self._config.message_create_url, self._config.header)
-                raise exc
+                raise
             if ret:
                 self.push_tick(ret)
 
@@ -379,10 +383,10 @@ class SymphonyAdapter:
         self._room_mapper = SymphonyRoomMapper.from_config(config)
 
     @csp.graph
-    def subscribe(self, rooms: set = set(), exit_msg: str = "") -> ts[[SymphonyMessage]]:
+    def subscribe(self, rooms: set | None = None, exit_msg: str = "") -> ts[[SymphonyMessage]]:
         return SymphonyReaderPushAdapter(
             config=self._config,
-            rooms=rooms,
+            rooms=rooms or set(),
             exit_msg=exit_msg,
             room_mapper=self._room_mapper,
         )
