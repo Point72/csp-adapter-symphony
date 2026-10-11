@@ -24,7 +24,9 @@ __all__ = (
 log = logging.getLogger(__name__)
 
 
-class SymphonyAdapter(BackendAdapter):
+# chatom re-exports BackendAdapter behind a try/except fallback, which ty models as a
+# class | function union. The import resolves to the class whenever csp is installed.
+class SymphonyAdapter(BackendAdapter):  # ty: ignore[invalid-base]
     """CSP adapter for Symphony using chatom's SymphonyBackend.
 
     This adapter wraps chatom's SymphonyBackend and provides a CSP
