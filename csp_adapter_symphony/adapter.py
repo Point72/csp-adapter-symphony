@@ -132,7 +132,8 @@ def _handle_event(event: dict, room_ids: set, room_mapper: SymphonyRoomMapper) -
                         msg=msg,
                     )
     elif event["type"] == "SYMPHONYELEMENTSACTION":
-        payload = event.get("payload").get("symphonyElementsAction", {})
+        event_payload = event.get("payload") or {}
+        payload = event_payload.get("symphonyElementsAction", {})
         payload_stream_id = payload.get("stream", {}).get("streamId")
 
         if not payload_stream_id:

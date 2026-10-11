@@ -246,7 +246,7 @@ class TestMentionFunctions:
     def test_mention_user_by_uid(self):
         """Test mentioning user by UID."""
 
-        result = mention_user_by_uid(12345)
+        result = mention_user_by_uid("12345")
         assert '<mention uid="12345"/>' in result
 
     def test_mention_user_by_email(self):

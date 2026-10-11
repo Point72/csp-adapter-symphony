@@ -193,7 +193,7 @@ class TestSymphony:
         assert format_with_message_ml(input_text, to_message_ml=False) == input_text
 
     def test_symphony_config_aliases(self):
-        config = SymphonyAdapterConfig(
+        config = SymphonyAdapterConfig(  # ty: ignore[missing-argument]
             auth_host="auth.host",
             session_auth_path="/sessionauth/v1/authenticate",
             key_auth_path="/keyauth/v1/authenticate",

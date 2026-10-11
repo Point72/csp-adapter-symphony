@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import timedelta
 from functools import cached_property
 from tempfile import NamedTemporaryFile
+from typing import Any, cast
 from urllib.parse import urljoin
 
 import requests
@@ -115,8 +116,8 @@ class SymphonyAdapterConfig(BaseModel):
             auth_host=self.auth_host,
             session_auth_path=self.session_auth_path,
             key_auth_path=self.key_auth_path,
-            cert_string=self.cert,
-            key_string=self.key,
+            cert_string=cast(str, self.cert),
+            key_string=cast(str, self.key),
         )
 
     def get_retry_decorator(self) -> Callable:
@@ -139,22 +140,23 @@ class SymphonyAdapterConfig(BaseModel):
 
     def get_user_ids_in_room(self, room_id: str | None = None, room_name: str | None = None) -> list[str]:
         """Given a room id or room name, returns the user id's of the users in the room. Exactly one of 'room_id' or 'room_name' must be set."""
-        room_name_is_none = room_name is None
-        room_id_is_none = room_id is None
-
-        if room_name_is_none and room_id_is_none:
+        if room_id is None and room_name is None:
             raise ValueError("One of 'room_name' and 'room_id' must not be None")
 
-        elif not room_name_is_none and not room_id_is_none:
+        if room_id is not None and room_name is not None:
             raise ValueError("At most one of 'room_name' and 'room_id' must be set.")
 
-        elif room_name_is_none and not room_id_is_none:
-            return _get_user_ids_in_room(room_id=room_id, room_members_url=self.room_members_url, header=self.header)
+        room_members_url = cast(str, self.room_members_url)
+
+        if room_id is not None:
+            return _get_user_ids_in_room(room_id=room_id, room_members_url=room_members_url, header=self.header)
 
         # Last case, must get room_id from room_name
-        if (true_room_id := self.get_room_id(room_name)) is None:
+        assert room_name is not None
+        true_room_id = self.get_room_id(room_name)
+        if true_room_id is None:
             return []
-        return _get_user_ids_in_room(room_id=true_room_id, room_members_url=self.room_members_url, header=self.header)
+        return _get_user_ids_in_room(room_id=true_room_id, room_members_url=room_members_url, header=self.header)
 
     def get_room_name(self, room_id: str) -> str | None:
         """Given room_id, returns the name of the room."""
@@ -200,7 +202,7 @@ class SymphonyRoomMapper:
             self._name_to_id[user] = id
 
 
-def _client_cert_post(host: str, request_url: str, cert_file: str, key_file: str) -> str:
+def _client_cert_post(host: str, request_url: str, cert_file: str, key_file: str) -> Any:
     # Define the client certificate settings for https connection
     context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
     context.load_cert_chain(certfile=cert_file, keyfile=key_file)

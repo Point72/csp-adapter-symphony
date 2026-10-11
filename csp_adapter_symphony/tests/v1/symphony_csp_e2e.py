@@ -25,6 +25,7 @@ import asyncio
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import csp
 from chatom.base import Channel, Message
@@ -59,7 +60,7 @@ def build_config() -> SymphonyConfig:
         print("❌ Authentication required.")
         sys.exit(1)
 
-    config_kwargs = {"host": host, "bot_username": bot_username}
+    config_kwargs: dict[str, Any] = {"host": host, "bot_username": bot_username}
 
     if private_key_path:
         config_kwargs["bot_private_key_path"] = private_key_path
@@ -108,8 +109,8 @@ class TestState:
     def __init__(self):
         self.results: list[tuple] = []
         self.config: SymphonyConfig | None = None
-        self.channel_id: str | None = None  # Generic field, not backend-specific
-        self.user_id: str | None = None
+        self.channel_id: str = ""  # Generic field, not backend-specific
+        self.user_id: str = ""
         self.bot_user_id: str | None = None
         self.bot_display_name: str | None = None
         self.received_message: Message | None = None
@@ -235,6 +236,7 @@ async def setup_and_run_pre_csp_tests():
 @csp.graph
 def symphony_csp_e2e_graph():
     """CSP graph for message streaming tests."""
+    assert STATE.config is not None, "STATE.config must be set before running the CSP graph"
     adapter = SymphonyAdapter(STATE.config)
 
     # Subscribe to all messages
